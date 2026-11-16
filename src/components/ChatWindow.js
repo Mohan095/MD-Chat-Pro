@@ -85,6 +85,19 @@ export default function ChatWindow({
     }
   }, [messages.length, activeTypingUsers.length]);
 
+  // Keep latest messages visible when mobile virtual keyboard opens
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return () => {};
+    const handleViewportResize = () => {
+      if (!showScrollBottom) {
+        scrollToBottom('auto');
+      }
+    };
+    vv.addEventListener('resize', handleViewportResize);
+    return () => vv.removeEventListener('resize', handleViewportResize);
+  }, [showScrollBottom]);
+
   const handleScroll = () => {
     const el = messagesContainerRef.current;
     if (!el) return;

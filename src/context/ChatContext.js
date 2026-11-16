@@ -32,6 +32,7 @@ import {
   deleteMessage,
   toggleMessageReaction,
   toggleStarMessage,
+  markChatAsDelivered,
   markChatAsRead,
   setTypingStatus,
   toggleChatFlag,
@@ -43,17 +44,8 @@ import {
   playNotificationSound,
   showDesktopNotification,
 } from '../services/notificationService';
-import { isFirebaseConfigured } from '../firebase/config';
 
 const ChatContext = createContext(null);
-
-const SMART_REPLIES = [
-  'Got it! Looking into that right now 🚀',
-  'That sounds awesome — the dark UI transitions look super clean ✨',
-  'Awesome update! Let me sync with the team and follow up shortly 👍',
-  '100% agreed. Our Firestore rules and real-time listeners handle that smoothly 🔒',
-  'Thanks for sharing! I will review and drop my notes here.',
-];
 
 export function ChatProvider({ children }) {
   const { currentUser } = useAuthContext();
@@ -99,7 +91,7 @@ export function ChatProvider({ children }) {
     });
   }, [currentUser?.uid]);
 
-  // Subscribe to user conversations
+  // Subscribe to user conversations in real time
   useEffect(() => {
     if (!currentUser?.uid) {
       setChats([]);
@@ -108,46 +100,52 @@ export function ChatProvider({ children }) {
     }
 
     return subscribeToUserChats(currentUser.uid, (updatedChats) => {
-      // Detect new incoming messages in background chats to play chime / toast
       const prevChats = prevChatsRef.current;
-      if (prevChats.length > 0) {
-        updatedChats.forEach((chat) => {
-          const prev = prevChats.find((p) => p.id === chat.id);
-          const isMuted = (chat.mutedBy || []).includes(currentUser.uid);
+
+      updatedChats.forEach((chat) => {
+        const lastMsg = chat.lastMessage;
+        if (lastMsg && lastMsg.senderId && lastMsg.senderId !== currentUser.uid) {
+          // If this chat is not currently open, mark incoming message as Delivered (✓✓)
           if (
-            prev &&
-            chat.lastMessage?.id &&
-            chat.lastMessage.id !== prev.lastMessage?.id &&
-            chat.lastMessage.senderId !== currentUser.uid &&
-            !isMuted
+            chat.id !== activeChatId &&
+            !(lastMsg.deliveredTo || []).includes(currentUser.uid)
           ) {
-            if (currentUser.notificationSettings?.soundEffects !== false) {
-              playNotificationSound('receive');
-            }
-            if (chat.id !== activeChatId) {
-              const preview =
-                currentUser.notificationSettings?.messagePreview !== false
-                  ? chat.lastMessage.text
-                  : 'New message received';
-              toast.message(preview, chat.lastMessage.senderName || 'New Message');
-              if (currentUser.notificationSettings?.desktopNotifications) {
-                showDesktopNotification({
-                  title: chat.lastMessage.senderName || 'MD Chat Pro',
-                  body: preview,
-                  onClick: () => setActiveChatId(chat.id),
-                });
+            markChatAsDelivered(chat.id, currentUser.uid);
+          }
+
+          // Detect newly arrived message to play chime / toast notification
+          if (prevChats.length > 0) {
+            const prev = prevChats.find((p) => p.id === chat.id);
+            const isMuted = (chat.mutedBy || []).includes(currentUser.uid);
+            if (prev && lastMsg.id && lastMsg.id !== prev.lastMessage?.id && !isMuted) {
+              if (currentUser.notificationSettings?.soundEffects !== false) {
+                playNotificationSound('receive');
+              }
+              if (chat.id !== activeChatId) {
+                const preview =
+                  currentUser.notificationSettings?.messagePreview !== false
+                    ? lastMsg.text
+                    : 'New message received';
+                toast.message(preview, lastMsg.senderName || 'New Message');
+                if (currentUser.notificationSettings?.desktopNotifications) {
+                  showDesktopNotification({
+                    title: lastMsg.senderName || 'MD Chat Pro',
+                    body: preview,
+                    onClick: () => setActiveChatId(chat.id),
+                  });
+                }
               }
             }
           }
-        });
-      }
+        }
+      });
 
       prevChatsRef.current = updatedChats;
       setChats(updatedChats);
     });
   }, [currentUser?.uid, currentUser?.notificationSettings, activeChatId]);
 
-  // Subscribe to active chat messages
+  // Subscribe to active chat messages in real time
   useEffect(() => {
     if (!activeChatId || !currentUser?.uid) {
       setMessages([]);
@@ -164,7 +162,9 @@ export function ChatProvider({ children }) {
     return subscribeToChatMessages(activeChatId, (chatMsgs) => {
       setMessages(chatMsgs);
       const hasUnreadFromOthers = chatMsgs.some(
-        (m) => m.senderId !== currentUser.uid && !(m.readBy || []).includes(currentUser.uid)
+        (m) =>
+          m.senderId !== currentUser.uid &&
+          (!(m.readBy || []).includes(currentUser.uid) || m.status !== 'read')
       );
       if (hasUnreadFromOthers) {
         markChatAsRead(activeChatId, currentUser.uid, sendReceipts);
@@ -176,7 +176,7 @@ export function ChatProvider({ children }) {
   const usersMap = useMemo(() => {
     const map = {};
     allUsers.forEach((u) => {
-      map[u.uid] = u;
+      if (u?.uid) map[u.uid] = u;
     });
     if (currentUser?.uid) {
       map[currentUser.uid] = currentUser;
@@ -184,13 +184,13 @@ export function ChatProvider({ children }) {
     return map;
   }, [allUsers, currentUser]);
 
-  // Enrich chats with display name, avatar, otherUser (for direct chats), and online status
+  // Enrich chats with display name, avatar, otherUser (identified strictly by UID), and online status
   const enrichedChats = useMemo(() => {
     if (!currentUser?.uid) return [];
     return chats.map((chat) => {
       if (chat.type === 'group') {
         const memberProfiles = (chat.participants || [])
-          .map((uid) => usersMap[uid])
+          .map((uid) => usersMap[uid] || chat.participantDetails?.[uid])
           .filter(Boolean);
         const onlineCount = memberProfiles.filter((m) => m.online).length;
         return {
@@ -210,10 +210,13 @@ export function ChatProvider({ children }) {
 
       const otherUid =
         (chat.participants || []).find((id) => id !== currentUser.uid) || currentUser.uid;
+      const fallbackDetail = chat.participantDetails?.[otherUid] || {};
       const otherUser = usersMap[otherUid] || {
         uid: otherUid,
-        displayName: 'MD Chat User',
-        username: 'user',
+        displayName: fallbackDetail.displayName || fallbackDetail.email?.split('@')[0] || 'User',
+        username: fallbackDetail.username || 'user',
+        email: fallbackDetail.email || '',
+        photoURL: fallbackDetail.photoURL || '',
         online: false,
       };
 
@@ -222,11 +225,12 @@ export function ChatProvider({ children }) {
 
       return {
         ...chat,
-        displayTitle: otherUser.displayName || 'User',
+        displayTitle: otherUser.displayName || otherUser.email?.split('@')[0] || 'User',
         displayAvatar: otherUser.photoURL || '',
         displaySubtitle: otherUser.statusText || otherUser.bio || '',
         isOnline:
-          otherUser.online && otherUser.privacySettings?.showOnlineStatus !== false,
+          Boolean(otherUser.online) &&
+          otherUser.privacySettings?.showOnlineStatus !== false,
         otherUser,
         isBlockedByMe,
         hasBlockedMe,
@@ -243,7 +247,7 @@ export function ChatProvider({ children }) {
     return enrichedChats.find((c) => c.id === activeChatId) || null;
   }, [enrichedChats, activeChatId]);
 
-  // Compute active typing users in the current chat (excluding self, expiring after 6s)
+  // Compute active typing users in the current chat
   const activeTypingUsers = useMemo(() => {
     if (!activeChat?.typing || !currentUser?.uid) return [];
     const now = Date.now();
@@ -275,7 +279,7 @@ export function ChatProvider({ children }) {
     return enrichedChats.reduce((acc, c) => acc + (c.unreadForMe || 0), 0);
   }, [enrichedChats]);
 
-  // Start or open a direct chat with a user
+  // Start or open a direct chat with a user using deterministic UID pair ID
   const openDirectChat = useCallback(
     async (targetUser) => {
       if (!currentUser?.uid || !targetUser?.uid) return null;
@@ -304,7 +308,7 @@ export function ChatProvider({ children }) {
     [currentUser, toast]
   );
 
-  // Send a message (with simulated real-time contact reply in local demo mode)
+  // Send a message with sender UID, receiver UID, and participants
   const handleSendMessage = useCallback(
     async ({ text = '', type = 'text', attachments = [] }) => {
       if (!activeChat || !currentUser?.uid) return;
@@ -318,9 +322,21 @@ export function ChatProvider({ children }) {
         return;
       }
 
+      const receiverUid =
+        activeChat.type === 'direct'
+          ? activeChat.otherUser?.uid ||
+            (activeChat.participants || []).find((id) => id !== currentUser.uid) ||
+            ''
+          : 'group';
+
       const sent = await sendMessage({
         chatId: activeChat.id,
         sender: currentUser,
+        receiverUid,
+        participants:
+          activeChat.participants?.length >= 2
+            ? activeChat.participants
+            : [currentUser.uid, receiverUid].filter(Boolean),
         text,
         type,
         attachments,

@@ -210,7 +210,13 @@ export default function Sidebar({
           const isLastFromMe = lastMsg?.senderId === currentUser?.uid;
           const isLastRead =
             isLastFromMe &&
-            (lastMsg?.readBy || []).some((id) => id !== currentUser?.uid);
+            (lastMsg?.status === 'read' ||
+              (lastMsg?.readBy || []).some((id) => id !== currentUser?.uid));
+          const isLastDelivered =
+            isLastFromMe &&
+            (isLastRead ||
+              lastMsg?.status === 'delivered' ||
+              (lastMsg?.deliveredTo || []).some((id) => id !== currentUser?.uid));
 
           return (
             <div
@@ -254,10 +260,21 @@ export default function Sidebar({
                         {isLastFromMe && (
                           <span
                             className={`preview-receipt ${
-                              isLastRead ? 'read' : ''
+                              isLastRead
+                                ? 'read'
+                                : isLastDelivered
+                                ? 'delivered'
+                                : 'sent'
                             }`}
+                            title={
+                              isLastRead
+                                ? 'Read ✓✓'
+                                : isLastDelivered
+                                ? 'Delivered ✓✓'
+                                : 'Sent ✓'
+                            }
                           >
-                            {isLastRead ? (
+                            {isLastRead || isLastDelivered ? (
                               <CheckCheck size={14} />
                             ) : (
                               <Check size={14} />

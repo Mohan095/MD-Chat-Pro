@@ -16,6 +16,7 @@ build/
 
 # Firebase cache & logs
 .firebase/
+.realtime-db.json
 firebase-debug.log
 firestore-debug.log
 ui-debug.log

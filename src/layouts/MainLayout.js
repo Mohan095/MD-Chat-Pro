@@ -22,13 +22,14 @@ export default function MainLayout({
   children,
 }) {
   const { currentUser, logout } = useAuth();
-  const { totalUnreadCount, friendRequests } = useChat();
+  const { totalUnreadCount, friendRequests, activeChatId } = useChat();
   const { theme, toggleTheme } = useTheme();
 
   const pendingRequestsCount = friendRequests.incoming?.length || 0;
+  const isMobileConversationOpen = activeNav === 'chats' && Boolean(activeChatId);
 
   return (
-    <div className="app-workspace">
+    <div className={`app-workspace ${isMobileConversationOpen ? 'mobile-chat-open' : ''}`}>
       {/* Left Desktop Navigation Rail */}
       <nav className="nav-rail" aria-label="Primary Navigation">
         <div className="nav-rail-top">

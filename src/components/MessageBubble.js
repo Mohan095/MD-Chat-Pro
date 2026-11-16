@@ -88,7 +88,12 @@ export default function MessageBubble({
 
   const isStarred = (message.starredBy || []).includes(currentUid);
   const readByOthers = (message.readBy || []).filter((id) => id !== message.senderId);
-  const isRead = readByOthers.length > 0;
+  const deliveredToOthers = (message.deliveredTo || []).filter(
+    (id) => id !== message.senderId
+  );
+  const isRead = message.status === 'read' || readByOthers.length > 0;
+  const isDelivered =
+    isRead || message.status === 'delivered' || deliveredToOthers.length > 0;
   const reactionsEntries = Object.entries(message.reactions || {}).filter(
     ([, users]) => Array.isArray(users) && users.length > 0
   );
@@ -385,10 +390,20 @@ export default function MessageBubble({
               <span className="msg-time">{formatMessageTime(message.createdAt)}</span>
               {isOwn && !message.deleted && (
                 <span
-                  className={`msg-receipt ${isRead ? 'receipt-read' : 'receipt-sent'}`}
-                  title={isRead ? 'Read' : 'Delivered'}
+                  className={`msg-receipt ${
+                    isRead
+                      ? 'receipt-read'
+                      : isDelivered
+                      ? 'receipt-delivered'
+                      : 'receipt-sent'
+                  }`}
+                  title={isRead ? 'Read ✓✓' : isDelivered ? 'Delivered ✓✓' : 'Sent ✓'}
                 >
-                  {isRead ? <CheckCheck size={14} /> : <Check size={14} />}
+                  {isRead || isDelivered ? (
+                    <CheckCheck size={15} />
+                  ) : (
+                    <Check size={14} />
+                  )}
                 </span>
               )}
             </div>
