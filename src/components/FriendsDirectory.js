@@ -21,7 +21,7 @@ export default function FriendsDirectory({ onSelectChat }) {
     unblockUser,
   } = useChat();
 
-  // 2 Main Tabs: 'all-friends' and 'online' (Website Login All Users View - View Only)
+  // 2 Main Tabs: 'all-friends' and 'online'
   const [activeTab, setActiveTab] = useState('all-friends'); // 'all-friends' | 'online'
   const [friendFilter, setFriendFilter] = useState('all'); // 'all' | 'online' | 'offline' | 'blocked'
   const [searchTerm, setSearchTerm] = useState('');
@@ -79,7 +79,7 @@ export default function FriendsDirectory({ onSelectChat }) {
     };
   }, [realContacts]);
 
-  // Online Tab: Website Login All Users View (Real users only, Online & Offline, View Only)
+  // Online Tab: Website Login All Users View (Click any user profile to open chat!)
   const websiteAllUsers = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return [...allUsers]
@@ -114,7 +114,7 @@ export default function FriendsDirectory({ onSelectChat }) {
         <div>
           <h2 className="directory-title">Contacts &amp; Friends</h2>
           <p className="directory-subtitle">
-            All Friends (Online, Offline &amp; Blocked) and Website Login Users
+            Click any profile card to open a real-time chat conversation
           </p>
         </div>
 
@@ -130,7 +130,7 @@ export default function FriendsDirectory({ onSelectChat }) {
         </div>
       </div>
 
-      {/* 2 Main Tabs: All Friends & Online (Website Login All Users View) */}
+      {/* 2 Main Tabs: All Friends & Online */}
       <div className="directory-tabs">
         <button
           type="button"
@@ -197,7 +197,15 @@ export default function FriendsDirectory({ onSelectChat }) {
                 const isOnline = friend.friendState === 'online';
 
                 return (
-                  <div key={friend.uid} className="contact-card">
+                  <div
+                    key={friend.uid}
+                    className="contact-card"
+                    style={{ cursor: isBlocked ? 'default' : 'pointer' }}
+                    onClick={() => {
+                      if (!isBlocked) handleMessageUser(friend);
+                    }}
+                    title={isBlocked ? 'Blocked user' : `Click to chat with ${friend.displayName}`}
+                  >
                     <div className="contact-card-top">
                       <Avatar
                         src={friend.photoURL}
@@ -252,7 +260,10 @@ export default function FriendsDirectory({ onSelectChat }) {
                       {friend.bio || 'Hey there! I am using MD Chat Pro.'}
                     </p>
 
-                    <div className="contact-card-actions">
+                    <div
+                      className="contact-card-actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {!isBlocked && (
                         <button
                           type="button"
@@ -302,7 +313,7 @@ export default function FriendsDirectory({ onSelectChat }) {
           </>
         )}
 
-        {/* TAB 2: ONLINE (Website Login All Users View — Online & Offline, View Only) */}
+        {/* TAB 2: ONLINE (Click any user profile to open chat!) */}
         {activeTab === 'online' && (
           <div className="directory-grid">
             {websiteAllUsers.map((user) => {
@@ -312,7 +323,15 @@ export default function FriendsDirectory({ onSelectChat }) {
                 user.privacySettings?.showOnlineStatus !== false;
 
               return (
-                <div key={user.uid} className="contact-card">
+                <div
+                  key={user.uid}
+                  className="contact-card"
+                  style={{ cursor: isMe ? 'default' : 'pointer' }}
+                  onClick={() => {
+                    if (!isMe) handleMessageUser(user);
+                  }}
+                  title={isMe ? 'Your profile' : `Click to open chat with ${user.displayName}`}
+                >
                   <div className="contact-card-top">
                     <Avatar
                       src={user.photoURL}

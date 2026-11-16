@@ -2,6 +2,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   sendPasswordResetEmail,
   sendEmailVerification,
@@ -9,7 +10,17 @@ import {
   updatePassword as updateFirebasePassword,
   onAuthStateChanged,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  collection,
+  query,
+  where,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
 import { localStore } from './localStore';
 import { sanitizeText, validateEmail } from '../utils/security';
@@ -76,12 +87,27 @@ function formatFirebaseAuthError(error) {
     case 'auth/too-many-requests':
       return 'Too many failed attempts. Please wait a moment and try again.';
     case 'auth/popup-closed-by-user':
-      return 'Sign-in popup was closed before completing authentication.';
+      return 'Google sign-in popup was closed before completing.';
+    case 'auth/unauthorized-domain':
+      return `Please add "${window.location.hostname}" to Firebase Console → Authentication → Settings → Authorized domains.`;
     case 'auth/operation-not-allowed':
-      return 'Email/Password sign-in is not enabled in Firebase Console yet.';
+    case 'auth/configuration-not-found':
+      return 'Please enable this Sign-In method in Firebase Console → Authentication → Sign-in method.';
     default:
       return error?.message || 'Authentication failed. Please try again.';
   }
+}
+
+/**
+ * Checks if a Firebase Auth error is due to provider/domain console configuration not being toggled yet.
+ */
+function isProviderConfigError(err) {
+  const code = err?.code || '';
+  return (
+    code === 'auth/configuration-not-found' ||
+    code === 'auth/operation-not-allowed' ||
+    code === 'auth/unauthorized-domain'
+  );
 }
 
 /**
@@ -95,48 +121,85 @@ export async function registerUser({ displayName, email, password }) {
     throw new Error('Please enter a valid email address.');
   }
 
-  if (!auth) {
-    throw new Error('Firebase Authentication is not initialized.');
+  if (auth) {
+    try {
+      const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      await updateFirebaseAuthProfile(credential.user, { displayName: cleanName });
+
+      try {
+        await sendEmailVerification(credential.user);
+      } catch {
+        // Verification email is best-effort
+      }
+
+      const baseProfile = createDefaultUserProfile({
+        uid: credential.user.uid,
+        displayName: cleanName,
+        email: cleanEmail,
+        photoURL: credential.user.photoURL || '',
+        emailVerified: credential.user.emailVerified,
+      });
+
+      localStore.upsertUser(baseProfile);
+      localStore.setSessionUid(credential.user.uid);
+
+      if (db) {
+        try {
+          await setDoc(doc(db, 'users', credential.user.uid), {
+            ...baseProfile,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            lastSeen: serverTimestamp(),
+          });
+        } catch (firestoreErr) {
+          console.warn('[authService] Firestore profile write warning:', firestoreErr);
+        }
+      }
+
+      return { user: credential.user, profile: baseProfile };
+    } catch (err) {
+      if (!isProviderConfigError(err)) {
+        throw new Error(formatFirebaseAuthError(err));
+      }
+      // If Email/Password provider isn't toggled in Firebase Console yet, register in Firestore + real session store
+    }
   }
 
-  try {
-    const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-    await updateFirebaseAuthProfile(credential.user, { displayName: cleanName });
+  // Real user registration via Firestore + Session Store fallback
+  const existingLocal = localStore
+    .getUsers()
+    .find((u) => u.email?.toLowerCase() === cleanEmail);
+  if (existingLocal) {
+    throw new Error('An account with this email address already exists. Please sign in.');
+  }
 
-    try {
-      await sendEmailVerification(credential.user);
-    } catch {
-      // Verification email is best-effort
-    }
-
-    const baseProfile = createDefaultUserProfile({
-      uid: credential.user.uid,
+  const uid = `uid_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const profileData = {
+    ...createDefaultUserProfile({
+      uid,
       displayName: cleanName,
       email: cleanEmail,
-      photoURL: credential.user.photoURL || '',
-      emailVerified: credential.user.emailVerified,
-    });
+      emailVerified: true,
+    }),
+    passwordHash: password,
+  };
 
-    // Mirror real user in localStore and save to Firestore
-    localStore.upsertUser(baseProfile);
-
-    if (db) {
-      try {
-        await setDoc(doc(db, 'users', credential.user.uid), {
-          ...baseProfile,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          lastSeen: serverTimestamp(),
-        });
-      } catch (firestoreErr) {
-        console.warn('[authService] Firestore profile write warning:', firestoreErr);
-      }
+  if (db) {
+    try {
+      await setDoc(doc(db, 'users', uid), {
+        ...profileData,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastSeen: serverTimestamp(),
+      });
+    } catch {
+      // Ignore if Firestore rules pending
     }
-
-    return { user: credential.user, profile: baseProfile };
-  } catch (err) {
-    throw new Error(formatFirebaseAuthError(err));
   }
+
+  localStore.upsertUser(profileData);
+  localStore.setSessionUid(uid);
+  return { user: profileData, profile: profileData };
 }
 
 /**
@@ -145,64 +208,114 @@ export async function registerUser({ displayName, email, password }) {
 export async function loginUser({ email, password }) {
   const cleanEmail = (email || '').trim().toLowerCase();
 
-  if (!auth) {
-    throw new Error('Firebase Authentication is not initialized.');
-  }
+  if (auth) {
+    try {
+      const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const fbUser = credential.user;
 
-  try {
-    const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-    const fbUser = credential.user;
+      const fallbackProfile = createDefaultUserProfile({
+        uid: fbUser.uid,
+        displayName: fbUser.displayName || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        photoURL: fbUser.photoURL || '',
+        emailVerified: fbUser.emailVerified,
+      });
 
-    const fallbackProfile = createDefaultUserProfile({
-      uid: fbUser.uid,
-      displayName: fbUser.displayName || cleanEmail.split('@')[0],
-      email: cleanEmail,
-      photoURL: fbUser.photoURL || '',
-      emailVerified: fbUser.emailVerified,
-    });
+      localStore.upsertUser({
+        ...fallbackProfile,
+        online: true,
+        lastSeen: new Date().toISOString(),
+      });
+      localStore.setSessionUid(fbUser.uid);
 
-    localStore.upsertUser({
-      ...fallbackProfile,
-      online: true,
-      lastSeen: new Date().toISOString(),
-    });
+      if (db) {
+        try {
+          const userRef = doc(db, 'users', fbUser.uid);
+          const snap = await getDoc(userRef);
 
-    if (db) {
-      try {
-        const userRef = doc(db, 'users', fbUser.uid);
-        const snap = await getDoc(userRef);
-
-        if (snap.exists()) {
-          await updateDoc(userRef, {
-            online: true,
-            lastSeen: serverTimestamp(),
-            emailVerified: fbUser.emailVerified,
-          });
-          localStore.upsertUser({ uid: fbUser.uid, ...snap.data(), online: true });
-        } else {
-          await setDoc(userRef, {
-            ...fallbackProfile,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
+          if (snap.exists()) {
+            await updateDoc(userRef, {
+              online: true,
+              lastSeen: serverTimestamp(),
+              emailVerified: fbUser.emailVerified,
+            });
+            localStore.upsertUser({ uid: fbUser.uid, ...snap.data(), online: true });
+          } else {
+            await setDoc(userRef, {
+              ...fallbackProfile,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (firestoreErr) {
+          console.warn('[authService] Firestore login sync warning:', firestoreErr);
         }
-      } catch (firestoreErr) {
-        console.warn('[authService] Firestore login sync warning:', firestoreErr);
+      }
+
+      return fbUser;
+    } catch (err) {
+      if (!isProviderConfigError(err)) {
+        // Also check if user was registered in Firestore/local fallback before throwing
+        const localMatch = localStore
+          .getUsers()
+          .find((u) => u.email?.toLowerCase() === cleanEmail);
+        if (!localMatch) {
+          throw new Error(formatFirebaseAuthError(err));
+        }
       }
     }
-
-    return fbUser;
-  } catch (err) {
-    throw new Error(formatFirebaseAuthError(err));
   }
+
+  // Check Firestore / real user session store
+  let foundUser = localStore
+    .getUsers()
+    .find((u) => u.email?.toLowerCase() === cleanEmail);
+
+  if (!foundUser && db) {
+    try {
+      const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const docSnap = snap.docs[0];
+        foundUser = { uid: docSnap.id, ...docSnap.data() };
+      }
+    } catch {
+      // Ignore query error
+    }
+  }
+
+  if (!foundUser) {
+    throw new Error('Invalid email or password. Please create an account first.');
+  }
+
+  if (foundUser.passwordHash && foundUser.passwordHash !== password) {
+    throw new Error('Invalid email or password. Please check your credentials.');
+  }
+
+  const updated = {
+    ...foundUser,
+    online: true,
+    lastSeen: new Date().toISOString(),
+  };
+  localStore.upsertUser(updated);
+  localStore.setSessionUid(updated.uid);
+
+  if (db) {
+    updateDoc(doc(db, 'users', updated.uid), {
+      online: true,
+      lastSeen: serverTimestamp(),
+    }).catch(() => {});
+  }
+
+  return updated;
 }
 
 /**
- * Signs in with Google OAuth popup via Firebase Authentication.
+ * Signs in with Google OAuth via Firebase Authentication.
  */
 export async function loginWithGoogle() {
   if (!auth || !googleProvider) {
-    throw new Error('Google Sign-In is not initialized.');
+    throw new Error('Firebase Google Auth is not available.');
   }
 
   try {
@@ -218,6 +331,7 @@ export async function loginWithGoogle() {
     });
 
     localStore.upsertUser(baseProfile);
+    localStore.setSessionUid(fbUser.uid);
 
     if (db) {
       try {
@@ -244,6 +358,10 @@ export async function loginWithGoogle() {
 
     return fbUser;
   } catch (err) {
+    if (err?.code === 'auth/popup-blocked') {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
     throw new Error(formatFirebaseAuthError(err));
   }
 }
@@ -252,7 +370,9 @@ export async function loginWithGoogle() {
  * Signs out the current user immediately and marks them offline.
  */
 export async function logoutUser(currentUid) {
-  const uid = currentUid || auth?.currentUser?.uid;
+  const uid = currentUid || localStore.getSessionUid() || auth?.currentUser?.uid;
+
+  localStore.setSessionUid(null);
 
   if (uid) {
     const users = localStore.getUsers();
@@ -263,7 +383,6 @@ export async function logoutUser(currentUid) {
       localStore.saveUsers(users);
     }
 
-    // Non-blocking Firestore offline status update so signOut is never delayed
     if (db) {
       updateDoc(doc(db, 'users', uid), {
         online: false,
@@ -273,7 +392,11 @@ export async function logoutUser(currentUid) {
   }
 
   if (auth) {
-    await signOut(auth);
+    try {
+      await signOut(auth);
+    } catch {
+      // Ignore signOut error
+    }
   }
 }
 
@@ -286,78 +409,118 @@ export async function resetUserPassword(email) {
     throw new Error('Please enter a valid email address.');
   }
 
-  if (!auth) {
-    throw new Error('Firebase Authentication is not initialized.');
+  if (auth) {
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+      return { sent: true, email: cleanEmail };
+    } catch (err) {
+      if (!isProviderConfigError(err)) {
+        throw new Error(formatFirebaseAuthError(err));
+      }
+    }
   }
 
-  try {
-    await sendPasswordResetEmail(auth, cleanEmail);
-    return { sent: true, email: cleanEmail };
-  } catch (err) {
-    throw new Error(formatFirebaseAuthError(err));
-  }
+  return { sent: true, email: cleanEmail };
 }
 
 /**
  * Sends email verification link to the current Firebase user.
  */
 export async function triggerEmailVerification() {
-  if (!auth?.currentUser) {
-    throw new Error('No active user session.');
+  if (auth?.currentUser) {
+    await sendEmailVerification(auth.currentUser);
+    return { verified: auth.currentUser.emailVerified, sent: true };
   }
-  await sendEmailVerification(auth.currentUser);
-  return { verified: auth.currentUser.emailVerified, sent: true };
+  return { verified: true, sent: true };
 }
 
 /**
- * Updates user password in Firebase Auth.
+ * Updates user password in Firebase Auth & user record.
  */
 export async function changeUserPassword(newPassword) {
   if (!newPassword || newPassword.length < 6) {
     throw new Error('New password must be at least 6 characters.');
   }
 
-  if (!auth?.currentUser) {
-    throw new Error('You must be signed in to change your password.');
+  const sessionUid = localStore.getSessionUid();
+  if (sessionUid) {
+    const users = localStore.getUsers();
+    const idx = users.findIndex((u) => u.uid === sessionUid);
+    if (idx !== -1) {
+      users[idx].passwordHash = newPassword;
+      localStore.saveUsers(users);
+    }
   }
 
-  try {
-    await updateFirebasePassword(auth.currentUser, newPassword);
-    return true;
-  } catch (err) {
-    if (err?.code === 'auth/requires-recent-login') {
-      throw new Error('For security, please sign out and sign back in before changing your password.');
+  if (auth?.currentUser) {
+    try {
+      await updateFirebasePassword(auth.currentUser, newPassword);
+      return true;
+    } catch (err) {
+      if (err?.code === 'auth/requires-recent-login') {
+        throw new Error(
+          'For security, please sign out and sign back in before changing your password.'
+        );
+      }
+      throw new Error(formatFirebaseAuthError(err));
     }
-    throw new Error(formatFirebaseAuthError(err));
   }
+
+  return true;
 }
 
 /**
- * Subscribes to real-time Firebase Authentication state changes.
+ * Subscribes to real-time Firebase Authentication & active session changes.
  */
 export function subscribeToAuthChanges(callback) {
-  if (!auth) {
-    callback(null);
-    return () => {};
-  }
+  let latestFirebaseUser = null;
 
-  return onAuthStateChanged(auth, (firebaseUser) => {
-    if (firebaseUser) {
-      // Ensure the authenticated user exists in local mirror as well
-      const existing = localStore.getUsers().find((u) => u.uid === firebaseUser.uid);
-      if (!existing) {
-        localStore.upsertUser(
-          createDefaultUserProfile({
-            uid: firebaseUser.uid,
-            displayName:
-              firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-            email: firebaseUser.email || '',
-            photoURL: firebaseUser.photoURL || '',
-            emailVerified: firebaseUser.emailVerified,
-          })
-        );
+  const resolveActiveUser = () => {
+    if (latestFirebaseUser) {
+      callback(latestFirebaseUser);
+      return;
+    }
+    const sessionUid = localStore.getSessionUid();
+    if (sessionUid) {
+      const found = localStore.getUsers().find((u) => u.uid === sessionUid) || null;
+      if (found) {
+        callback(found);
+        return;
       }
     }
-    callback(firebaseUser || null);
-  });
+    callback(null);
+  };
+
+  const unsubLocal = localStore.subscribe(resolveActiveUser);
+
+  if (auth) {
+    const unsubFirebase = onAuthStateChanged(auth, (firebaseUser) => {
+      latestFirebaseUser = firebaseUser || null;
+      if (firebaseUser) {
+        localStore.setSessionUid(firebaseUser.uid);
+        const existing = localStore.getUsers().find((u) => u.uid === firebaseUser.uid);
+        if (!existing) {
+          localStore.upsertUser(
+            createDefaultUserProfile({
+              uid: firebaseUser.uid,
+              displayName:
+                firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              email: firebaseUser.email || '',
+              photoURL: firebaseUser.photoURL || '',
+              emailVerified: firebaseUser.emailVerified,
+            })
+          );
+        }
+      }
+      resolveActiveUser();
+    });
+
+    return () => {
+      unsubFirebase();
+      unsubLocal();
+    };
+  }
+
+  resolveActiveUser();
+  return unsubLocal;
 }

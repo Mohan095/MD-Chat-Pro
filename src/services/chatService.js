@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   addDoc,
+  setDoc,
   getDoc,
   getDocs,
   updateDoc,
@@ -32,51 +33,63 @@ function sortChatsForUser(chats, uid) {
   });
 }
 
-function isLocalChatId(chatId) {
-  return (
-    !chatId ||
-    chatId.startsWith('chat_') ||
-    chatId.startsWith('group_') ||
-    isLocalDemoUid()
-  );
+function isLocalChatId() {
+  return false;
 }
 
 /**
- * Subscribes to all conversations where the user is a participant.
+ * Subscribes to all conversations where the user is a participant (merges Firestore & local mirror).
  */
 export function subscribeToUserChats(uid, callback) {
   if (!uid) return () => {};
 
-  const emitLocal = () => {
-    const allChats = localStore.getChats();
-    const userChats = allChats.filter((c) => (c.participants || []).includes(uid));
-    callback(sortChatsForUser(userChats, uid));
+  let firestoreChats = [];
+
+  const emitMerged = () => {
+    const map = new Map();
+    const localChats = localStore
+      .getChats()
+      .filter((c) => (c.participants || []).includes(uid));
+    localChats.forEach((c) => {
+      if (c?.id) map.set(c.id, c);
+    });
+    firestoreChats.forEach((c) => {
+      if (c?.id) map.set(c.id, { ...(map.get(c.id) || {}), ...c });
+    });
+    callback(sortChatsForUser(Array.from(map.values()), uid));
   };
 
-  if (isFirebaseConfigured && db && !isLocalDemoUid(uid)) {
+  const unsubLocal = localStore.subscribe(emitMerged);
+
+  if (isFirebaseConfigured && db) {
     const q = query(
       collection(db, 'chats'),
       where('participants', 'array-contains', uid)
     );
 
-    return onSnapshot(
+    const unsubFirestore = onSnapshot(
       q,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        callback(sortChatsForUser(list, uid));
+        firestoreChats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        emitMerged();
       },
       () => {
-        emitLocal();
+        emitMerged();
       }
     );
+
+    return () => {
+      unsubFirestore();
+      unsubLocal();
+    };
   }
 
-  emitLocal();
-  return localStore.subscribe(emitLocal);
+  emitMerged();
+  return unsubLocal;
 }
 
 /**
- * Subscribes to real-time messages for a specific chat.
+ * Subscribes to real-time messages for a specific chat (merges Firestore & local mirror).
  */
 export function subscribeToChatMessages(chatId, callback) {
   if (!chatId) {
@@ -84,104 +97,75 @@ export function subscribeToChatMessages(chatId, callback) {
     return () => {};
   }
 
-  const emitLocal = () => {
-    const msgs = localStore.getChatMessages(chatId);
-    const sorted = [...msgs].sort(
+  let firestoreMsgs = [];
+
+  const emitMerged = () => {
+    const map = new Map();
+    localStore.getChatMessages(chatId).forEach((m) => {
+      if (m?.id) map.set(m.id, m);
+    });
+    firestoreMsgs.forEach((m) => {
+      if (m?.id) map.set(m.id, { ...(map.get(m.id) || {}), ...m });
+    });
+    const sorted = Array.from(map.values()).sort(
       (a, b) => toDate(a.createdAt).getTime() - toDate(b.createdAt).getTime()
     );
     callback(sorted);
   };
 
-  if (isFirebaseConfigured && db && !isLocalChatId(chatId)) {
+  const unsubLocal = localStore.subscribe(emitMerged);
+
+  if (isFirebaseConfigured && db) {
     const q = query(
       collection(db, 'chats', chatId, 'messages'),
       orderBy('createdAt', 'asc')
     );
 
-    return onSnapshot(
+    const unsubFirestore = onSnapshot(
       q,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        callback(list);
+        firestoreMsgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        emitMerged();
       },
       () => {
-        emitLocal();
+        emitMerged();
       }
     );
+
+    return () => {
+      unsubFirestore();
+      unsubLocal();
+    };
   }
 
-  emitLocal();
-  return localStore.subscribe(emitLocal);
+  emitMerged();
+  return unsubLocal;
 }
 
 /**
- * Finds an existing 1-to-1 chat between two users or creates one if it doesn't exist.
+ * Finds an existing 1-to-1 chat between two users or creates one immediately.
  */
 export async function getOrCreateDirectChat(currentUser, targetUser) {
   if (!currentUser?.uid || !targetUser?.uid) {
     throw new Error('Both participants are required to start a chat.');
   }
 
-  if (isFirebaseConfigured && db && !isLocalDemoUid(currentUser.uid)) {
-    try {
-      const q = query(
-        collection(db, 'chats'),
-        where('participants', 'array-contains', currentUser.uid)
-      );
-      const snap = await getDocs(q);
-      const existing = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .find(
-          (c) =>
-            c.type === 'direct' &&
-            c.participants.length === 2 &&
-            c.participants.includes(targetUser.uid)
-        );
-
-      if (existing) return existing;
-
-      const payload = {
-        type: 'direct',
-        name: '',
-        description: '',
-        avatar: '',
-        participants: [currentUser.uid, targetUser.uid],
-        adminIds: [],
-        createdBy: currentUser.uid,
-        pinnedBy: [],
-        mutedBy: [],
-        archivedBy: [],
-        typing: {},
-        unreadCount: {
-          [currentUser.uid]: 0,
-          [targetUser.uid]: 0,
-        },
-        lastMessage: null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-
-      const docRef = await addDoc(collection(db, 'chats'), payload);
-      return { id: docRef.id, ...payload };
-    } catch {
-      // Fallback to local
-    }
-  }
+  const sortedPair = [currentUser.uid, targetUser.uid].sort();
+  const deterministicId = `direct_${sortedPair[0]}_${sortedPair[1]}`;
 
   const chats = localStore.getChats();
-  const existing = chats.find(
+  const existingLocal = chats.find(
     (c) =>
-      c.type === 'direct' &&
-      c.participants.length === 2 &&
-      c.participants.includes(currentUser.uid) &&
-      c.participants.includes(targetUser.uid)
+      c.id === deterministicId ||
+      (c.type === 'direct' &&
+        c.participants?.length === 2 &&
+        c.participants.includes(currentUser.uid) &&
+        c.participants.includes(targetUser.uid))
   );
 
-  if (existing) return existing;
-
   const now = new Date().toISOString();
-  const newChat = {
-    id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  const chatObj = existingLocal || {
+    id: deterministicId,
     type: 'direct',
     name: '',
     description: '',
@@ -202,10 +186,23 @@ export async function getOrCreateDirectChat(currentUser, targetUser) {
     updatedAt: now,
   };
 
-  chats.unshift(newChat);
-  localStore.saveChats(chats);
-  localStore.saveChatMessages(newChat.id, []);
-  return newChat;
+  if (!existingLocal) {
+    chats.unshift(chatObj);
+    localStore.saveChats(chats);
+  }
+
+  if (isFirebaseConfigured && db) {
+    setDoc(
+      doc(db, 'chats', chatObj.id),
+      {
+        ...chatObj,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
+  }
+
+  return chatObj;
 }
 
 /**

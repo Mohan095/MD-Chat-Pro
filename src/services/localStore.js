@@ -13,6 +13,7 @@ const OLD_NPC_KEYS = [
 
 const STORAGE_KEYS = {
   USERS: 'mdchat_real_users_v3',
+  SESSION: 'mdchat_real_session_uid_v3',
   CHATS: 'mdchat_real_chats_v3',
   MESSAGES: 'mdchat_real_messages_v3',
   FRIEND_REQUESTS: 'mdchat_real_friend_requests_v3',
@@ -88,6 +89,21 @@ class LocalRealtimeStore {
     } catch (err) {
       console.error('[LocalRealtimeStore] Write error:', err);
     }
+  }
+
+  getSessionUid() {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(STORAGE_KEYS.SESSION) || null;
+  }
+
+  setSessionUid(uid) {
+    if (typeof window === 'undefined') return;
+    if (uid) {
+      localStorage.setItem(STORAGE_KEYS.SESSION, uid);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.SESSION);
+    }
+    this.notifyListeners(true);
   }
 
   getUsers() {
