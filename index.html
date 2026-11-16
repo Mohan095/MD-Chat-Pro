@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0b141a" />
+    <meta
+      name="description"
+      content="MD Chat Pro — Real-time messaging platform."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <title>MD Chat Pro — Real-Time Messaging</title>
+    <script>
+      (function () {
+        // Disable right-click context menu (blocks "View Page Source" & "Inspect")
+        document.addEventListener(
+          'contextmenu',
+          function (e) {
+            e.preventDefault();
+            return false;
+          },
+          true
+        );
+
+        // Disable F12, Ctrl+U (View Source), Ctrl+Shift+I/J/C/K (DevTools), and Ctrl+S (Save Source)
+        document.addEventListener(
+          'keydown',
+          function (e) {
+            var key = (e.key || '').toLowerCase();
+            var code = e.keyCode || e.which;
+
+            // F12
+            if (e.key === 'F12' || code === 123) {
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            }
+
+            // Ctrl+U / Cmd+U (View Page Source) or Ctrl+S / Cmd+S (Save Page)
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (key === 'u' || key === 's' || code === 85 || code === 83)) {
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            }
+
+            // Ctrl+Shift+I / J / C / K or Cmd+Option+I / J / C / K / U
+            if (
+              ((e.ctrlKey && e.shiftKey) || (e.metaKey && e.altKey)) &&
+              (key === 'i' ||
+                key === 'j' ||
+                key === 'c' ||
+                key === 'k' ||
+                key === 'u' ||
+                code === 73 ||
+                code === 74 ||
+                code === 67 ||
+                code === 75 ||
+                code === 85)
+            ) {
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            }
+          },
+          true
+        );
+      })();
+    </script>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run MD Chat Pro.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/src/index.js"></script>
+  </body>
+</html>

@@ -1,0 +1,192 @@
+:root,
+[data-theme='dark'] {
+  /* Authentic WhatsApp Web Dark Mode Palette (Normal Mode) */
+  --bg-app: #0b141a;
+  --bg-chat-canvas: #0b141a;
+  --bg-surface: #111b21;
+  --bg-elevated: #202c33;
+  --bg-card: #111b21;
+  --bg-glass: rgba(17, 27, 33, 0.94);
+  --bg-input: #2a3942;
+  --bg-hover: #202c33;
+  --bg-active: #2a3942;
+
+  /* WhatsApp Typography */
+  --text-primary: #e9edef;
+  --text-secondary: #8696a0;
+  --text-muted: #667781;
+  --text-inverse: #111b21;
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(134, 150, 160, 0.15);
+  --border-strong: rgba(134, 150, 160, 0.26);
+  --border-focus: #00a884;
+
+  /* WhatsApp Brand & Accent */
+  --accent-primary: #00a884;
+  --accent-secondary: #008069;
+  --accent-bright: #25d366;
+  --accent-glow: rgba(0, 168, 132, 0.28);
+
+  /* Authentic WhatsApp Dark Message Bubbles */
+  --bubble-own-bg: #005c4b;
+  --bubble-own-solid: #005c4b;
+  --bubble-own-text: #e9edef;
+  --bubble-own-meta: rgba(233, 237, 239, 0.68);
+  --bubble-incoming-bg: #202c33;
+  --bubble-incoming-text: #e9edef;
+  --bubble-incoming-meta: rgba(134, 150, 160, 0.85);
+
+  /* Read Receipt Blue Ticks & Status Colors */
+  --receipt-read-color: #53bdeb;
+  --receipt-sent-color: rgba(233, 237, 239, 0.6);
+  --color-online: #00a884;
+  --color-warning: #f59e0b;
+  --color-danger: #f15c6d;
+  --color-info: #53bdeb;
+
+  /* WhatsApp Doodle Pattern Overlay (Dark Mode) */
+  --whatsapp-doodle-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240' fill='none' stroke='%238696a0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' stroke-opacity='0.14'%3E%3Cpath d='M24 28h28a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H34l-10 8v-8a6 6 0 0 1-6-6V34a6 6 0 0 1 6-6z'/%3E%3Cpath d='M108 36c-4-5-12-5-16 0-4 5-4 12 0 17l16 15 16-15c4-5 4-12 0-17-4-5-12-5-16 0z'/%3E%3Cpath d='M182 28l34 14-14 34-6-16-16-6 2-26z'/%3E%3Ccircle cx='42' cy='112' r='16'/%3E%3Cpath d='M35 116c3 4 11 4 14 0'/%3E%3Ccircle cx='37' cy='108' r='1.5'/%3E%3Ccircle cx='47' cy='108' r='1.5'/%3E%3Cpath d='M102 102h24v16a12 12 0 0 1-24 0v-16z'/%3E%3Cpath d='M126 106h5a5 5 0 0 1 0 10h-5'/%3E%3Cpath d='M98 134h32'/%3E%3Cpath d='M188 124V96l24-6v28'/%3E%3Ccircle cx='182' cy='124' r='6'/%3E%3Ccircle cx='206' cy='118' r='6'/%3E%3Crect x='22' y='178' width='36' height='26' rx='5'/%3E%3Ccircle cx='40' cy='191' r='7'/%3E%3Cpath d='M32 178l4-6h8l4 6'/%3E%3Cpolygon points='114,170 119,181 131,183 122,191 124,203 114,197 104,203 106,191 97,183 109,181'/%3E%3Cpath d='M178 176c4 14 14 24 28 28l6-6c2-2 5-2 7 0l8 8c2 2 2 6 0 8-6 6-16 8-26 4-16-6-30-20-36-36-4-10-2-20 4-26 2-2 6-2 8 0l8 8c2 2 2 5 0 7l-7 5z'/%3E%3Cpath d='M158 64a12 12 0 1 1-14 14 9 9 0 0 0 14-14z'/%3E%3Ccircle cx='74' cy='72' r='3'/%3E%3Ccircle cx='152' cy='148' r='3.5'/%3E%3Ccircle cx='72' cy='152' r='2.5'/%3E%3Ccircle cx='218' cy='70' r='3'/%3E%3C/svg%3E");
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(11, 20, 26, 0.45);
+  --shadow-md: 0 4px 16px rgba(11, 20, 26, 0.55);
+  --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.65);
+  --shadow-glow: 0 4px 16px rgba(0, 168, 132, 0.28);
+
+  /* Radii & Transitions */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  --transition-fast: 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-smooth: 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme='light'] {
+  /* Authentic WhatsApp Web Light Mode Palette (Normal Mode) */
+  --bg-app: #efeae2;
+  --bg-chat-canvas: #efeae2;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f0f2f5;
+  --bg-card: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.95);
+  --bg-input: #ffffff;
+  --bg-hover: #f5f6f6;
+  --bg-active: #f0f2f5;
+
+  --text-primary: #111b21;
+  --text-secondary: #54656f;
+  --text-muted: #667781;
+  --text-inverse: #ffffff;
+
+  --border-subtle: #e9edef;
+  --border-strong: #d1d7db;
+  --border-focus: #00a884;
+
+  --accent-primary: #00a884;
+  --accent-secondary: #008069;
+  --accent-bright: #25d366;
+  --accent-glow: rgba(0, 168, 132, 0.22);
+
+  /* Authentic WhatsApp Light Message Bubbles (#d9fdd3 Outgoing & #ffffff Incoming) */
+  --bubble-own-bg: #d9fdd3;
+  --bubble-own-solid: #d9fdd3;
+  --bubble-own-text: #111b21;
+  --bubble-own-meta: #667781;
+  --bubble-incoming-bg: #ffffff;
+  --bubble-incoming-text: #111b21;
+  --bubble-incoming-meta: #667781;
+
+  --receipt-read-color: #53bdeb;
+  --receipt-sent-color: #667781;
+  --color-online: #00a884;
+
+  --whatsapp-doodle-svg: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240' fill='none' stroke='%2354656f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' stroke-opacity='0.11'%3E%3Cpath d='M24 28h28a6 6 0 0 1 6 6v16a6 6 0 0 1-6 6H34l-10 8v-8a6 6 0 0 1-6-6V34a6 6 0 0 1 6-6z'/%3E%3Cpath d='M108 36c-4-5-12-5-16 0-4 5-4 12 0 17l16 15 16-15c4-5 4-12 0-17-4-5-12-5-16 0z'/%3E%3Cpath d='M182 28l34 14-14 34-6-16-16-6 2-26z'/%3E%3Ccircle cx='42' cy='112' r='16'/%3E%3Cpath d='M35 116c3 4 11 4 14 0'/%3E%3Ccircle cx='37' cy='108' r='1.5'/%3E%3Ccircle cx='47' cy='108' r='1.5'/%3E%3Cpath d='M102 102h24v16a12 12 0 0 1-24 0v-16z'/%3E%3Cpath d='M126 106h5a5 5 0 0 1 0 10h-5'/%3E%3Cpath d='M98 134h32'/%3E%3Cpath d='M188 124V96l24-6v28'/%3E%3Ccircle cx='182' cy='124' r='6'/%3E%3Ccircle cx='206' cy='118' r='6'/%3E%3Crect x='22' y='178' width='36' height='26' rx='5'/%3E%3Ccircle cx='40' cy='191' r='7'/%3E%3Cpath d='M32 178l4-6h8l4 6'/%3E%3Cpolygon points='114,170 119,181 131,183 122,191 124,203 114,197 104,203 106,191 97,183 109,181'/%3E%3Cpath d='M178 176c4 14 14 24 28 28l6-6c2-2 5-2 7 0l8 8c2 2 2 6 0 8-6 6-16 8-26 4-16-6-30-20-36-36-4-10-2-20 4-26 2-2 6-2 8 0l8 8c2 2 2 5 0 7l-7 5z'/%3E%3Cpath d='M158 64a12 12 0 1 1-14 14 9 9 0 0 0 14-14z'/%3E%3Ccircle cx='74' cy='72' r='3'/%3E%3Ccircle cx='152' cy='148' r='3.5'/%3E%3Ccircle cx='72' cy='152' r='2.5'/%3E%3Ccircle cx='218' cy='70' r='3'/%3E%3C/svg%3E");
+
+  --shadow-sm: 0 1px 1.5px rgba(11, 20, 26, 0.13);
+  --shadow-md: 0 4px 14px rgba(11, 20, 26, 0.12);
+  --shadow-lg: 0 12px 32px rgba(11, 20, 26, 0.18);
+}
+
+/* =========================================================================
+   Black & White (Monochrome) Appearance Mode
+   ========================================================================= */
+[data-appearance='bw'][data-theme='dark'] {
+  --bg-app: #09090b;
+  --bg-chat-canvas: #09090b;
+  --bg-surface: #121214;
+  --bg-elevated: #1c1c1f;
+  --bg-card: #121214;
+  --bg-glass: rgba(18, 18, 20, 0.94);
+  --bg-input: #27272a;
+  --bg-hover: #1f1f23;
+  --bg-active: #27272a;
+
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-inverse: #09090b;
+
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --border-focus: #ffffff;
+
+  --accent-primary: #e4e4e7;
+  --accent-secondary: #a1a1aa;
+  --accent-bright: #ffffff;
+  --accent-glow: rgba(255, 255, 255, 0.18);
+
+  --bubble-own-bg: #27272a;
+  --bubble-own-solid: #27272a;
+  --bubble-own-text: #ffffff;
+  --bubble-own-meta: rgba(255, 255, 255, 0.65);
+  --bubble-incoming-bg: #18181b;
+  --bubble-incoming-text: #f4f4f5;
+  --bubble-incoming-meta: #a1a1aa;
+
+  --receipt-read-color: #ffffff;
+  --receipt-sent-color: #71717a;
+  --color-online: #e4e4e7;
+}
+
+[data-appearance='bw'][data-theme='light'] {
+  --bg-app: #f4f4f5;
+  --bg-chat-canvas: #f4f4f5;
+  --bg-surface: #ffffff;
+  --bg-elevated: #e4e4e7;
+  --bg-card: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.94);
+  --bg-input: #ffffff;
+  --bg-hover: #f4f4f5;
+  --bg-active: #e4e4e7;
+
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --text-inverse: #ffffff;
+
+  --border-subtle: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --border-focus: #18181b;
+
+  --accent-primary: #18181b;
+  --accent-secondary: #3f3f46;
+  --accent-bright: #09090b;
+  --accent-glow: rgba(24, 24, 27, 0.16);
+
+  --bubble-own-bg: #18181b;
+  --bubble-own-solid: #18181b;
+  --bubble-own-text: #ffffff;
+  --bubble-own-meta: rgba(255, 255, 255, 0.72);
+  --bubble-incoming-bg: #ffffff;
+  --bubble-incoming-text: #09090b;
+  --bubble-incoming-meta: #71717a;
+
+  --receipt-read-color: #ffffff;
+  --receipt-sent-color: #a1a1aa;
+  --color-online: #18181b;
+}

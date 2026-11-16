@@ -1,0 +1,67 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // =========================================================================
+    // Helper Functions
+    // =========================================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/(jpeg|png|gif|webp|svg\\+xml)');
+    }
+
+    function isAllowedChatAttachment() {
+      return request.resource.contentType.matches('image/.*')
+        || request.resource.contentType.matches('application/pdf')
+        || request.resource.contentType.matches('text/plain')
+        || request.resource.contentType.matches('text/markdown')
+        || request.resource.contentType.matches('text/csv')
+        || request.resource.contentType.matches('application/zip')
+        || request.resource.contentType.matches('application/json')
+        || request.resource.contentType.matches('application/msword')
+        || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.*')
+        || request.resource.contentType.matches('audio/.*')
+        || request.resource.contentType.matches('video/.*');
+    }
+
+    function isMaxSizeMB(maxMB) {
+      return request.resource.size <= maxMB * 1024 * 1024;
+    }
+
+    // =========================================================================
+    // User Profile Pictures (/avatars/{userId}/{fileName})
+    // =========================================================================
+    match /avatars/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && isImage()
+        && isMaxSizeMB(5);
+    }
+
+    // =========================================================================
+    // Group Avatars (/group_avatars/{groupId}/{fileName})
+    // =========================================================================
+    match /group_avatars/{groupId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+        && isImage()
+        && isMaxSizeMB(5);
+    }
+
+    // =========================================================================
+    // Chat Media & File Attachments (/chats/{chatId}/{senderId}/{fileName})
+    // =========================================================================
+    match /chats/{chatId}/{senderId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+        && request.auth.uid == senderId
+        && isAllowedChatAttachment()
+        && isMaxSizeMB(15);
+    }
+  }
+}
