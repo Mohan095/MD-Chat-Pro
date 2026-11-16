@@ -17,37 +17,37 @@ export const firebaseConfig = {
   apiKey: getEnvVar(
     'VITE_FIREBASE_API_KEY',
     'REACT_APP_FIREBASE_API_KEY',
-    'AIzaSyDeXcFamvPcgJCV3NrXa3AxTtHSEcs5OM4'
+    'AIzaSyAQmNN8pj5HOAaraT8-arZoVpn6FgFEXRQ'
   ),
   authDomain: getEnvVar(
     'VITE_FIREBASE_AUTH_DOMAIN',
     'REACT_APP_FIREBASE_AUTH_DOMAIN',
-    'md-chat-87f45.firebaseapp.com'
+    'mdchatpro.firebaseapp.com'
   ),
   projectId: getEnvVar(
     'VITE_FIREBASE_PROJECT_ID',
     'REACT_APP_FIREBASE_PROJECT_ID',
-    'md-chat-87f45'
+    'mdchatpro'
   ),
   storageBucket: getEnvVar(
     'VITE_FIREBASE_STORAGE_BUCKET',
     'REACT_APP_FIREBASE_STORAGE_BUCKET',
-    'md-chat-87f45.firebasestorage.app'
+    'mdchatpro.firebasestorage.app'
   ),
   messagingSenderId: getEnvVar(
     'VITE_FIREBASE_MESSAGING_SENDER_ID',
     'REACT_APP_FIREBASE_MESSAGING_SENDER_ID',
-    '601166300479'
+    '561164399873'
   ),
   appId: getEnvVar(
     'VITE_FIREBASE_APP_ID',
     'REACT_APP_FIREBASE_APP_ID',
-    '1:601166300479:web:97a53763e3fdb76d273f8a'
+    '1:561164399873:web:5a39c774380ac715b39700'
   ),
   measurementId: getEnvVar(
     'VITE_FIREBASE_MEASUREMENT_ID',
     'REACT_APP_FIREBASE_MEASUREMENT_ID',
-    'G-S40KFTWM5D'
+    'G-ZVPEQ9K6ZE'
   ),
   databaseURL: getEnvVar(
     'VITE_FIREBASE_DATABASE_URL',
