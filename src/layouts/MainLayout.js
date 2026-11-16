@@ -124,7 +124,7 @@ export default function MainLayout({
           <button
             type="button"
             className="nav-rail-btn nav-logout-btn"
-            onClick={logout}
+            onClick={() => logout()}
             title="Sign Out"
           >
             <LogOut size={19} />

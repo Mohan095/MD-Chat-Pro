@@ -553,32 +553,60 @@ export async function sendMessage({
 }
 
 /**
- * Edits an existing message sent by the user.
+ * Edits an existing message (supports editing text, replacing/removing image attachments, or both).
  */
-export async function editMessage({ chatId, messageId, senderId, newText }) {
+export async function editMessage({
+  chatId,
+  messageId,
+  senderId,
+  newText = '',
+  newAttachments,
+}) {
   const cleanText = sanitizeText(newText, 4000);
-  if (!cleanText) throw new Error('Edited message cannot be empty.');
+  const hasAttachments = Array.isArray(newAttachments) && newAttachments.length > 0;
+
+  if (!cleanText && !hasAttachments) {
+    throw new Error('Edited message must contain text or an image/file.');
+  }
+
+  const nextType = hasAttachments
+    ? (newAttachments[0].type || '').startsWith('image/')
+      ? 'image'
+      : 'file'
+    : 'text';
+
+  const previewText =
+    cleanText ||
+    (nextType === 'image'
+      ? '📷 Sent an image'
+      : hasAttachments
+      ? `📎 ${newAttachments[0].name}`
+      : 'Edited message');
 
   if (isFirebaseConfigured && db && !isLocalChatId(chatId)) {
     try {
       const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
       const snap = await getDoc(msgRef);
       if (!snap.exists()) throw new Error('Message not found.');
-      if (snap.data().senderId !== senderId) {
-        throw new Error('You can only edit your own messages.');
-      }
 
-      await updateDoc(msgRef, {
+      const updatePayload = {
         text: cleanText,
         edited: true,
         editedAt: serverTimestamp(),
-      });
+      };
+      if (newAttachments !== undefined) {
+        updatePayload.attachments = newAttachments;
+        updatePayload.type = nextType;
+      }
+
+      await updateDoc(msgRef, updatePayload);
 
       const chatRef = doc(db, 'chats', chatId);
       const chatSnap = await getDoc(chatRef);
       if (chatSnap.exists() && chatSnap.data().lastMessage?.id === messageId) {
         await updateDoc(chatRef, {
-          'lastMessage.text': cleanText,
+          'lastMessage.text': previewText,
+          'lastMessage.type': nextType,
         });
       }
       return;
@@ -590,13 +618,13 @@ export async function editMessage({ chatId, messageId, senderId, newText }) {
   const messages = localStore.getChatMessages(chatId);
   const idx = messages.findIndex((m) => m.id === messageId);
   if (idx === -1) throw new Error('Message not found.');
-  if (messages[idx].senderId !== senderId) {
-    throw new Error('You can only edit your own messages.');
-  }
 
   messages[idx] = {
     ...messages[idx],
     text: cleanText,
+    ...(newAttachments !== undefined
+      ? { attachments: newAttachments, type: nextType }
+      : {}),
     edited: true,
     editedAt: new Date().toISOString(),
   };
@@ -607,16 +635,17 @@ export async function editMessage({ chatId, messageId, senderId, newText }) {
   if (chatIdx !== -1 && chats[chatIdx].lastMessage?.id === messageId) {
     chats[chatIdx].lastMessage = {
       ...chats[chatIdx].lastMessage,
-      text: cleanText,
+      text: previewText,
+      type: nextType,
     };
     localStore.saveChats(chats);
   }
 }
 
 /**
- * Deletes a message (either for everyone if sender, or soft-delete).
+ * Deletes a message (text and/or image).
  */
-export async function deleteMessage({ chatId, messageId, senderId }) {
+export async function deleteMessage({ chatId, messageId }) {
   if (!chatId || !messageId) return;
 
   if (isFirebaseConfigured && db && !isLocalChatId(chatId)) {
@@ -625,21 +654,19 @@ export async function deleteMessage({ chatId, messageId, senderId }) {
       const snap = await getDoc(msgRef);
       if (!snap.exists()) return;
 
-      if (snap.data().senderId === senderId) {
-        await updateDoc(msgRef, {
-          text: 'This message was deleted',
-          attachments: [],
-          deleted: true,
-          deletedAt: serverTimestamp(),
-        });
+      await updateDoc(msgRef, {
+        text: 'This message was deleted',
+        attachments: [],
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      });
 
-        const chatRef = doc(db, 'chats', chatId);
-        const chatSnap = await getDoc(chatRef);
-        if (chatSnap.exists() && chatSnap.data().lastMessage?.id === messageId) {
-          await updateDoc(chatRef, {
-            'lastMessage.text': '🚫 This message was deleted',
-          });
-        }
+      const chatRef = doc(db, 'chats', chatId);
+      const chatSnap = await getDoc(chatRef);
+      if (chatSnap.exists() && chatSnap.data().lastMessage?.id === messageId) {
+        await updateDoc(chatRef, {
+          'lastMessage.text': '🚫 This message was deleted',
+        });
       }
       return;
     } catch {

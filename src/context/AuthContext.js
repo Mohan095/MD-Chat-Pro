@@ -3,7 +3,6 @@ import {
   registerUser,
   loginUser,
   loginWithGoogle,
-  loginAsDemoUser,
   logoutUser,
   resetUserPassword,
   triggerEmailVerification,
@@ -52,9 +51,16 @@ export function AuthProvider({ children }) {
         } else {
           setUserProfile({
             uid: currentUser.uid,
-            displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+            displayName:
+              currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+            username:
+              (currentUser.displayName || currentUser.email?.split('@')[0] || 'user')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, ''),
             email: currentUser.email || '',
             photoURL: currentUser.photoURL || '',
+            bio: 'Hey there! I am using MD Chat Pro.',
+            statusText: '🟢 Available',
             online: true,
             emailVerified: Boolean(currentUser.emailVerified),
             friends: [],
@@ -87,31 +93,32 @@ export function AuthProvider({ children }) {
     return res;
   }, []);
 
-  const handleDemoLogin = useCallback(async (demoUid) => {
-    const res = await loginAsDemoUser(demoUid);
-    return res;
-  }, []);
-
   const handleLogout = useCallback(async () => {
-    await logoutUser(authUser?.uid);
-  }, [authUser]);
+    const uid = authUser?.uid || userProfile?.uid;
+    // Immediately clear React auth state so UI transitions to /login right away
+    setAuthUser(null);
+    setUserProfile(null);
+    await logoutUser(uid);
+  }, [authUser, userProfile]);
 
   const handleUpdateProfile = useCallback(
     async (updates) => {
-      if (!authUser?.uid) throw new Error('Not authenticated.');
-      return updateUserProfile(authUser.uid, updates);
+      const uid = authUser?.uid || userProfile?.uid;
+      if (!uid) throw new Error('Not authenticated.');
+      return updateUserProfile(uid, updates);
     },
-    [authUser]
+    [authUser, userProfile]
   );
 
   const handleUploadAvatar = useCallback(
     async (file, onProgress) => {
-      if (!authUser?.uid) throw new Error('Not authenticated.');
-      const url = await uploadProfileAvatar(authUser.uid, file, onProgress);
-      await updateUserProfile(authUser.uid, { photoURL: url });
+      const uid = authUser?.uid || userProfile?.uid;
+      if (!uid) throw new Error('Not authenticated.');
+      const url = await uploadProfileAvatar(uid, file, onProgress);
+      await updateUserProfile(uid, { photoURL: url });
       return url;
     },
-    [authUser]
+    [authUser, userProfile]
   );
 
   return (
@@ -125,7 +132,6 @@ export function AuthProvider({ children }) {
         register: handleRegister,
         login: handleLogin,
         loginWithGoogle: handleGoogleLogin,
-        loginAsDemoUser: handleDemoLogin,
         logout: handleLogout,
         resetPassword: resetUserPassword,
         sendVerificationEmail: triggerEmailVerification,

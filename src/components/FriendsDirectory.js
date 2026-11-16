@@ -16,14 +16,12 @@ export default function FriendsDirectory({ onSelectChat }) {
   const { currentUser } = useAuth();
   const {
     allUsers,
-    friendsList,
-    blockedUsersList,
     openDirectChat,
     blockUser,
     unblockUser,
   } = useChat();
 
-  // Only 2 main views as requested: 'all-friends' and 'online' (all website users: online & offline)
+  // 2 Main Tabs: 'all-friends' and 'online' (Website Login All Users View - View Only)
   const [activeTab, setActiveTab] = useState('all-friends'); // 'all-friends' | 'online'
   const [friendFilter, setFriendFilter] = useState('all'); // 'all' | 'online' | 'offline' | 'blocked'
   const [searchTerm, setSearchTerm] = useState('');
@@ -32,31 +30,26 @@ export default function FriendsDirectory({ onSelectChat }) {
     return new Set(currentUser?.blockedUsers || []);
   }, [currentUser?.blockedUsers]);
 
-  // All Friends combined list: Online friends, Offline friends, and Blocked friends
-  const allFriendsCombined = useMemo(() => {
-    const map = new Map();
-
-    friendsList.forEach((f) => {
-      const isBlocked = blockedUids.has(f.uid);
-      const isOnline =
-        !isBlocked &&
-        Boolean(f.online) &&
-        f.privacySettings?.showOnlineStatus !== false;
-      map.set(f.uid, {
-        ...f,
-        friendState: isBlocked ? 'blocked' : isOnline ? 'online' : 'offline',
+  // Real users (excluding current user) categorized into Online, Offline, and Blocked
+  const realContacts = useMemo(() => {
+    return allUsers
+      .filter((u) => u.uid && u.uid !== currentUser?.uid)
+      .map((u) => {
+        const isBlocked = blockedUids.has(u.uid);
+        const isOnline =
+          !isBlocked &&
+          Boolean(u.online) &&
+          u.privacySettings?.showOnlineStatus !== false;
+        return {
+          ...u,
+          friendState: isBlocked ? 'blocked' : isOnline ? 'online' : 'offline',
+        };
       });
-    });
+  }, [allUsers, currentUser?.uid, blockedUids]);
 
-    blockedUsersList.forEach((b) => {
-      map.set(b.uid, {
-        ...b,
-        friendState: 'blocked',
-      });
-    });
-
+  const filteredFriends = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    return Array.from(map.values()).filter((u) => {
+    return realContacts.filter((u) => {
       if (friendFilter !== 'all' && u.friendState !== friendFilter) {
         return false;
       }
@@ -67,31 +60,30 @@ export default function FriendsDirectory({ onSelectChat }) {
         u.email?.toLowerCase().includes(q)
       );
     });
-  }, [friendsList, blockedUsersList, blockedUids, friendFilter, searchTerm]);
+  }, [realContacts, friendFilter, searchTerm]);
 
   const counts = useMemo(() => {
     let onlineCount = 0;
     let offlineCount = 0;
-    friendsList.forEach((f) => {
-      if (blockedUids.has(f.uid)) return;
-      const isOnline =
-        Boolean(f.online) && f.privacySettings?.showOnlineStatus !== false;
-      if (isOnline) onlineCount += 1;
+    let blockedCount = 0;
+    realContacts.forEach((u) => {
+      if (u.friendState === 'blocked') blockedCount += 1;
+      else if (u.friendState === 'online') onlineCount += 1;
       else offlineCount += 1;
     });
-    const blockedCount = blockedUsersList.length;
     return {
-      total: onlineCount + offlineCount + blockedCount,
+      total: realContacts.length,
       online: onlineCount,
       offline: offlineCount,
       blocked: blockedCount,
     };
-  }, [friendsList, blockedUsersList, blockedUids]);
+  }, [realContacts]);
 
-  // Online Tab: Website Login All Users View (both Online and Offline users, view-only)
+  // Online Tab: Website Login All Users View (Real users only, Online & Offline, View Only)
   const websiteAllUsers = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return [...allUsers]
+      .filter((u) => Boolean(u?.uid))
       .filter((u) => {
         if (!q) return true;
         return (
@@ -109,7 +101,7 @@ export default function FriendsDirectory({ onSelectChat }) {
   }, [allUsers, searchTerm]);
 
   const handleMessageUser = async (user) => {
-    if (user.uid === currentUser?.uid) return;
+    if (!user?.uid || user.uid === currentUser?.uid) return;
     const chat = await openDirectChat(user);
     if (chat && onSelectChat) {
       onSelectChat(chat.id);
@@ -122,7 +114,7 @@ export default function FriendsDirectory({ onSelectChat }) {
         <div>
           <h2 className="directory-title">Contacts &amp; Friends</h2>
           <p className="directory-subtitle">
-            View all friends (online, offline &amp; blocked) and all registered website users
+            All Friends (Online, Offline &amp; Blocked) and Website Login Users
           </p>
         </div>
 
@@ -156,17 +148,19 @@ export default function FriendsDirectory({ onSelectChat }) {
           onClick={() => setActiveTab('online')}
         >
           <Globe size={16} />
-          <span>Online (All Website Users)</span>
+          <span>Online</span>
           <span className="dir-tab-count">{websiteAllUsers.length}</span>
         </button>
       </div>
 
-      {/* Directory Content Area */}
       <div className="directory-body">
-        {/* TAB 1: ALL FRIENDS (Online, Offline & Blocked Friends) */}
+        {/* TAB 1: ALL FRIENDS (Online, Offline & Blocked) */}
         {activeTab === 'all-friends' && (
           <>
-            <div className="sidebar-filter-tabs" style={{ paddingLeft: 0, marginBottom: '18px' }}>
+            <div
+              className="sidebar-filter-tabs"
+              style={{ paddingLeft: 0, marginBottom: '18px' }}
+            >
               <button
                 type="button"
                 className={`filter-tab ${friendFilter === 'all' ? 'active' : ''}`}
@@ -198,7 +192,7 @@ export default function FriendsDirectory({ onSelectChat }) {
             </div>
 
             <div className="directory-grid">
-              {allFriendsCombined.map((friend) => {
+              {filteredFriends.map((friend) => {
                 const isBlocked = friend.friendState === 'blocked';
                 const isOnline = friend.friendState === 'online';
 
@@ -213,8 +207,16 @@ export default function FriendsDirectory({ onSelectChat }) {
                         showStatus={!isBlocked}
                       />
                       <div className="contact-card-info">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <h4 className="contact-card-name">{friend.displayName}</h4>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <h4 className="contact-card-name">
+                            {friend.displayName}
+                          </h4>
                           <span
                             className={`info-presence-badge ${
                               isOnline ? 'online' : 'offline'
@@ -236,11 +238,11 @@ export default function FriendsDirectory({ onSelectChat }) {
                           </span>
                         </div>
                         <span className="contact-card-handle">
-                          @{friend.username || 'user'}
+                          @{friend.username || 'user'} • {friend.email}
                         </span>
                         <span className="contact-card-status">
                           {isBlocked
-                            ? 'Blocked friend'
+                            ? 'Blocked user'
                             : friend.statusText || formatPresenceStatus(friend)}
                         </span>
                       </div>
@@ -276,7 +278,7 @@ export default function FriendsDirectory({ onSelectChat }) {
                           type="button"
                           className="btn btn-ghost btn-sm"
                           onClick={() => blockUser(friend.uid)}
-                          title="Block friend"
+                          title="Block user"
                         >
                           <Ban size={15} />
                           <span>Block</span>
@@ -287,11 +289,13 @@ export default function FriendsDirectory({ onSelectChat }) {
                 );
               })}
 
-              {allFriendsCombined.length === 0 && (
+              {filteredFriends.length === 0 && (
                 <div className="directory-empty">
                   <Users size={34} />
-                  <h3>No friends found in this filter</h3>
-                  <p>Try switching between All, Online, Offline, or Blocked filters.</p>
+                  <h3>No friends found</h3>
+                  <p>
+                    Real users who register on the website will appear here automatically.
+                  </p>
                 </div>
               )}
             </div>
@@ -318,7 +322,13 @@ export default function FriendsDirectory({ onSelectChat }) {
                       showStatus
                     />
                     <div className="contact-card-info">
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
                         <h4 className="contact-card-name">
                           {user.displayName} {isMe ? '(You)' : ''}
                         </h4>
@@ -349,7 +359,7 @@ export default function FriendsDirectory({ onSelectChat }) {
             {websiteAllUsers.length === 0 && (
               <div className="directory-empty">
                 <Globe size={34} />
-                <h3>No users match your search</h3>
+                <h3>No registered users found</h3>
               </div>
             )}
           </div>

@@ -6,8 +6,6 @@ import {
   Eye,
   EyeOff,
   ArrowRight,
-  KeyRound,
-  Sparkles,
   CheckCircle2,
 } from 'lucide-react';
 import AuthLayout from '../layouts/AuthLayout';
@@ -21,14 +19,13 @@ import {
 } from '../utils/security';
 
 export default function AuthPage() {
-  const { login, register, loginWithGoogle, loginAsDemoUser, resetPassword } = useAuth();
+  const { login, register, loginWithGoogle, resetPassword } = useAuth();
   const toast = useToast();
 
   const [mode, setMode] = useState('login'); // login | register | forgot
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -82,10 +79,6 @@ export default function AuthPage() {
         setError(nameCheck.message);
         return;
       }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
-        return;
-      }
 
       try {
         setLoading(true);
@@ -107,7 +100,7 @@ export default function AuthPage() {
     try {
       setLoading(true);
       await login({ email, password });
-      toast.success('Welcome back to MD Chat Pro!');
+      toast.success('Signed in to MD Chat Pro!');
     } catch (err) {
       setError(err.message || 'Invalid email or password.');
     } finally {
@@ -120,22 +113,9 @@ export default function AuthPage() {
     try {
       setLoading(true);
       await loginWithGoogle();
-      toast.success('Signed in successfully!');
+      toast.success('Signed in with Google!');
     } catch (err) {
       setError(err.message || 'Google sign-in failed.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleQuickDemo = async (uid, name) => {
-    setError('');
-    try {
-      setLoading(true);
-      await loginAsDemoUser(uid);
-      toast.success(`Signed in as ${name}`);
-    } catch (err) {
-      setError(err.message || 'Failed to launch demo session.');
     } finally {
       setLoading(false);
     }
@@ -172,9 +152,9 @@ export default function AuthPage() {
           </h2>
           <p className="auth-card-subtitle">
             {mode === 'login' &&
-              'Sign in to access your real-time conversations and workspaces.'}
+              'Sign in with your email and password to access your conversations.'}
             {mode === 'register' &&
-              'Join MD Chat Pro to start messaging friends and teams instantly.'}
+              'Register your account to start messaging friends in real time.'}
             {mode === 'forgot' &&
               'Enter your registered email and we will send you a password recovery link.'}
           </p>
@@ -201,7 +181,7 @@ export default function AuthPage() {
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="Alex Rivera"
+                  placeholder="Enter your name"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   required
@@ -279,23 +259,6 @@ export default function AuthPage() {
             </div>
           )}
 
-          {mode === 'register' && (
-            <div className="form-group">
-              <label className="form-label">Confirm Password</label>
-              <div className="input-with-icon">
-                <KeyRound size={17} className="input-icon" />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  className="form-input"
-                  placeholder="Confirm your password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-          )}
-
           <button
             type="submit"
             className="btn btn-primary btn-block auth-submit-btn"
@@ -305,7 +268,7 @@ export default function AuthPage() {
               {loading
                 ? 'Please wait...'
                 : mode === 'login'
-                ? 'Sign In to Workspace'
+                ? 'Sign In'
                 : mode === 'register'
                 ? 'Create Account'
                 : 'Send Recovery Link'}
@@ -356,40 +319,6 @@ export default function AuthPage() {
               </svg>
               <span>Continue with Google</span>
             </button>
-
-            {/* Instant 1-Click Demo Account Switcher */}
-            <div className="demo-accounts-box">
-              <div className="demo-box-header">
-                <Sparkles size={14} />
-                <span>Instant Demo Accounts (Pre-loaded Chats &amp; Contacts)</span>
-              </div>
-              <div className="demo-accounts-grid">
-                <button
-                  type="button"
-                  className="demo-user-chip"
-                  onClick={() => handleQuickDemo('user_alex_rivera', 'Alex Rivera')}
-                >
-                  <span className="demo-chip-dot" />
-                  <span>Alex Rivera</span>
-                </button>
-                <button
-                  type="button"
-                  className="demo-user-chip"
-                  onClick={() => handleQuickDemo('user_sarah_chen', 'Sarah Chen')}
-                >
-                  <span className="demo-chip-dot" />
-                  <span>Sarah Chen</span>
-                </button>
-                <button
-                  type="button"
-                  className="demo-user-chip"
-                  onClick={() => handleQuickDemo('user_marcus_vance', 'Marcus Vance')}
-                >
-                  <span className="demo-chip-dot" />
-                  <span>Marcus Vance</span>
-                </button>
-              </div>
-            </div>
           </>
         )}
       </div>

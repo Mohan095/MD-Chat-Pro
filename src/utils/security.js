@@ -188,6 +188,20 @@ export function initClientSourceProtection() {
     return false;
   };
 
+  const handleSelectStart = (e) => {
+    const tag = e.target?.tagName?.toLowerCase?.() || '';
+    if (tag !== 'input' && tag !== 'textarea') {
+      e.preventDefault();
+      return false;
+    }
+    return true;
+  };
+
+  const handleDragStart = (e) => {
+    e.preventDefault();
+    return false;
+  };
+
   const handleKeyDown = (e) => {
     const key = (e.key || '').toLowerCase();
     const code = e.keyCode || e.which;
@@ -224,10 +238,14 @@ export function initClientSourceProtection() {
   };
 
   document.addEventListener('contextmenu', handleContextMenu, true);
+  document.addEventListener('selectstart', handleSelectStart, true);
+  document.addEventListener('dragstart', handleDragStart, true);
   window.addEventListener('keydown', handleKeyDown, true);
 
   return () => {
     document.removeEventListener('contextmenu', handleContextMenu, true);
+    document.removeEventListener('selectstart', handleSelectStart, true);
+    document.removeEventListener('dragstart', handleDragStart, true);
     window.removeEventListener('keydown', handleKeyDown, true);
   };
 }

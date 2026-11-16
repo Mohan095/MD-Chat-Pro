@@ -252,11 +252,13 @@ export function ChatProvider({ children }) {
       .map(([uid]) => usersMap[uid]?.displayName || 'Someone');
   }, [activeChat, currentUser?.uid, usersMap]);
 
-  // Friends list & online friends
+  // Real contacts & online friends (excludes self and blocked users)
   const friendsList = useMemo(() => {
-    const friendIds = currentUser?.friends || [];
-    return friendIds.map((uid) => usersMap[uid]).filter(Boolean);
-  }, [currentUser?.friends, usersMap]);
+    const blockedSet = new Set(currentUser?.blockedUsers || []);
+    return allUsers.filter(
+      (u) => u?.uid && u.uid !== currentUser?.uid && !blockedSet.has(u.uid)
+    );
+  }, [allUsers, currentUser?.uid, currentUser?.blockedUsers]);
 
   const onlineFriends = useMemo(() => {
     return friendsList.filter(
@@ -330,36 +332,6 @@ export function ChatProvider({ children }) {
       }
       setReplyingTo(null);
 
-      // Simulate realistic typing indicator & read receipt when messaging built-in contacts
-      if (activeChat.id.startsWith('chat_') || activeChat.id.startsWith('group_')) {
-        const responder =
-          activeChat.type === 'direct'
-            ? activeChat.otherUser
-            : activeChat.memberProfiles?.find(
-                (m) => m.uid !== currentUser.uid && m.online && m.uid.startsWith('user_')
-              );
-
-        if (responder && responder.online && responder.uid.startsWith('user_')) {
-          const targetChatId = activeChat.id;
-          setTimeout(() => {
-            markChatAsRead(targetChatId, responder.uid, true);
-            setTypingStatus(targetChatId, responder.uid, true);
-          }, 750);
-
-          setTimeout(() => {
-            setTypingStatus(targetChatId, responder.uid, false);
-            const randomReply =
-              SMART_REPLIES[Math.floor(Math.random() * SMART_REPLIES.length)];
-            sendMessage({
-              chatId: targetChatId,
-              sender: responder,
-              text: randomReply,
-              type: 'text',
-            });
-          }, 2200);
-        }
-      }
-
       return sent;
     },
     [activeChat, currentUser, replyingTo, toast]
@@ -385,13 +357,25 @@ export function ChatProvider({ children }) {
   );
 
   const handleEditMessage = useCallback(
-    async (messageId, newText) => {
+    async (messageId, newText, newAttachments, newImageFile) => {
       if (!activeChatId || !currentUser?.uid) return;
+
+      let resolvedAttachments = newAttachments;
+      if (newImageFile) {
+        const uploaded = await uploadChatAttachment({
+          chatId: activeChatId,
+          senderId: currentUser.uid,
+          file: newImageFile,
+        });
+        resolvedAttachments = [uploaded];
+      }
+
       await editMessage({
         chatId: activeChatId,
         messageId,
         senderId: currentUser.uid,
         newText,
+        newAttachments: resolvedAttachments,
       });
       setEditingMessage(null);
       toast.success('Message updated');

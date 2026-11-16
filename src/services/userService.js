@@ -13,11 +13,10 @@ import {
 import { updateProfile as updateFirebaseAuthProfile } from 'firebase/auth';
 import { auth, db, isFirebaseConfigured } from '../firebase/config';
 import { localStore } from './localStore';
-import { isLocalDemoUid } from './authService';
 import { sanitizeText } from '../utils/security';
 
 /**
- * Subscribes to a single user profile document in real time.
+ * Subscribes to a single real user profile document in real time.
  */
 export function subscribeToUserProfile(uid, callback) {
   if (!uid) return () => {};
@@ -28,12 +27,14 @@ export function subscribeToUserProfile(uid, callback) {
     callback(found ? { ...found } : null);
   };
 
-  if (isFirebaseConfigured && db && !isLocalDemoUid(uid)) {
+  if (isFirebaseConfigured && db) {
     return onSnapshot(
       doc(db, 'users', uid),
       (snap) => {
         if (snap.exists()) {
-          callback({ uid: snap.id, ...snap.data() });
+          const data = { uid: snap.id, ...snap.data() };
+          localStore.upsertUser(data);
+          callback(data);
         } else {
           emitLocal();
         }
@@ -49,33 +50,43 @@ export function subscribeToUserProfile(uid, callback) {
 }
 
 /**
- * Subscribes to all users in real time (merges Firestore users with built-in contacts if needed).
+ * Subscribes to all real registered users in real time (merges Firestore users with local mirror).
  */
 export function subscribeToAllUsers(callback) {
-  const emitLocal = () => {
-    const users = localStore.getUsers().map(({ passwordHash, ...safeUser }) => safeUser);
-    callback(users);
+  let firestoreUsers = [];
+
+  const emitMerged = () => {
+    const map = new Map();
+    localStore.getUsers().forEach((u) => {
+      if (u?.uid) map.set(u.uid, u);
+    });
+    firestoreUsers.forEach((u) => {
+      if (u?.uid) map.set(u.uid, { ...(map.get(u.uid) || {}), ...u });
+    });
+    callback(Array.from(map.values()));
   };
 
-  if (isFirebaseConfigured && db && !isLocalDemoUid()) {
-    return onSnapshot(
+  const unsubLocal = localStore.subscribe(emitMerged);
+
+  if (isFirebaseConfigured && db) {
+    const unsubFirestore = onSnapshot(
       collection(db, 'users'),
       (snap) => {
-        const firestoreUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
-        if (firestoreUsers.length > 0) {
-          callback(firestoreUsers);
-        } else {
-          emitLocal();
-        }
+        firestoreUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+        emitMerged();
       },
       () => {
-        emitLocal();
+        emitMerged();
       }
     );
+    return () => {
+      unsubFirestore();
+      unsubLocal();
+    };
   }
 
-  emitLocal();
-  return localStore.subscribe(emitLocal);
+  emitMerged();
+  return unsubLocal;
 }
 
 /**
@@ -83,7 +94,7 @@ export function subscribeToAllUsers(callback) {
  */
 export async function getUserById(uid) {
   if (!uid) return null;
-  if (isFirebaseConfigured && db && !isLocalDemoUid(uid)) {
+  if (isFirebaseConfigured && db) {
     try {
       const snap = await getDoc(doc(db, 'users', uid));
       if (snap.exists()) return { uid: snap.id, ...snap.data() };
@@ -96,7 +107,7 @@ export async function getUserById(uid) {
 }
 
 /**
- * Updates user profile fields (displayName, username, bio, statusText, photoURL, privacySettings, notificationSettings).
+ * Updates user profile fields in Firestore and local mirror.
  */
 export async function updateUserProfile(uid, updates) {
   if (!uid) throw new Error('User ID is required.');
@@ -117,12 +128,19 @@ export async function updateUserProfile(uid, updates) {
     cleanUpdates.statusText = sanitizeText(cleanUpdates.statusText, 60);
   }
 
-  if (isFirebaseConfigured && db && !isLocalDemoUid(uid)) {
+  localStore.upsertUser({
+    uid,
+    ...cleanUpdates,
+    updatedAt: new Date().toISOString(),
+  });
+
+  if (isFirebaseConfigured && db) {
     try {
       const userRef = doc(db, 'users', uid);
       await setDoc(
         userRef,
         {
+          uid,
           ...cleanUpdates,
           updatedAt: serverTimestamp(),
         },
@@ -137,47 +155,29 @@ export async function updateUserProfile(uid, updates) {
           await updateFirebaseAuthProfile(auth.currentUser, authProfilePatch);
         }
       }
-      return cleanUpdates;
     } catch (err) {
-      console.warn('[userService] Firestore update fallback to localStore:', err);
+      console.warn('[userService] Firestore update warning:', err);
     }
   }
 
-  const users = localStore.getUsers();
-  const idx = users.findIndex((u) => u.uid === uid);
-  if (idx !== -1) {
-    users[idx] = {
-      ...users[idx],
-      ...cleanUpdates,
-      updatedAt: new Date().toISOString(),
-    };
-  } else {
-    users.push({
-      uid,
-      ...cleanUpdates,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-  localStore.saveUsers(users);
   return cleanUpdates;
 }
 
 /**
- * Searches users by displayName, username, or email.
+ * Searches real registered users by displayName, username, or email.
  */
 export async function searchUsers(searchTerm, currentUid) {
   const term = (searchTerm || '').trim().toLowerCase();
 
-  let allUsers = [];
-  if (isFirebaseConfigured && db && !isLocalDemoUid(currentUid)) {
+  let allUsers = localStore.getUsers();
+  if (isFirebaseConfigured && db) {
     try {
       const snap = await getDocs(collection(db, 'users'));
-      allUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+      const remote = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+      if (remote.length > 0) allUsers = remote;
     } catch {
-      allUsers = localStore.getUsers();
+      // Use local mirror
     }
-  } else {
-    allUsers = localStore.getUsers();
   }
 
   return allUsers
@@ -194,22 +194,10 @@ export async function searchUsers(searchTerm, currentUid) {
 }
 
 /**
- * Blocks a user so they cannot message or interact with the current user.
+ * Blocks a user.
  */
 export async function blockUser(currentUid, targetUid) {
   if (!currentUid || !targetUid) return;
-
-  if (isFirebaseConfigured && db && !isLocalDemoUid(currentUid)) {
-    try {
-      await updateDoc(doc(db, 'users', currentUid), {
-        blockedUsers: arrayUnion(targetUid),
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    } catch {
-      // Fallback to localStore
-    }
-  }
 
   const users = localStore.getUsers();
   const idx = users.findIndex((u) => u.uid === currentUid);
@@ -219,30 +207,40 @@ export async function blockUser(currentUid, targetUid) {
     users[idx].blockedUsers = Array.from(blocked);
     localStore.saveUsers(users);
   }
+
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, 'users', currentUid), {
+        blockedUsers: arrayUnion(targetUid),
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Ignore if Firestore rules pending
+    }
+  }
 }
 
 /**
- * Unblocks a previously blocked user.
+ * Unblocks a user.
  */
 export async function unblockUser(currentUid, targetUid) {
   if (!currentUid || !targetUid) return;
-
-  if (isFirebaseConfigured && db && !isLocalDemoUid(currentUid)) {
-    try {
-      await updateDoc(doc(db, 'users', currentUid), {
-        blockedUsers: arrayRemove(targetUid),
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    } catch {
-      // Fallback to localStore
-    }
-  }
 
   const users = localStore.getUsers();
   const idx = users.findIndex((u) => u.uid === currentUid);
   if (idx !== -1) {
     users[idx].blockedUsers = (users[idx].blockedUsers || []).filter((id) => id !== targetUid);
     localStore.saveUsers(users);
+  }
+
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, 'users', currentUid), {
+        blockedUsers: arrayRemove(targetUid),
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Ignore if Firestore rules pending
+    }
   }
 }

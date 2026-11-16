@@ -13,6 +13,7 @@ import {
   Ban,
 } from 'lucide-react';
 import Avatar from './Avatar';
+import EmojiPicker from './EmojiPicker';
 import {
   formatMessageTime,
   formatFileSize,
@@ -22,12 +23,49 @@ import { isSafeUrl } from '../utils/security';
 import { QUICK_REACTIONS } from '../utils/constants';
 import { useToast } from '../context/ToastContext';
 
+/**
+ * Copies an image URL or DataURL to the system clipboard as a PNG Blob,
+ * and caches it in window.__mdchatCopiedAttachment for instant in-app paste.
+ */
+async function copyImageToClipboard(attachment) {
+  if (!attachment?.url) return false;
+  window.__mdchatCopiedAttachment = attachment;
+
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = attachment.url;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width || 400;
+    canvas.height = img.naturalHeight || img.height || 300;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (blob && navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      return true;
+    }
+  } catch {
+    // Fallback if ClipboardItem is restricted
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(attachment.url);
+  }
+  return true;
+}
+
 export default function MessageBubble({
   message,
   isOwn,
   isGroup,
   currentUid,
-  participantsCount = 2,
   searchHighlight = '',
   onReply,
   onEdit,
@@ -37,6 +75,7 @@ export default function MessageBubble({
   onPreviewImage,
 }) {
   const [showReactionTray, setShowReactionTray] = useState(false);
+  const [showFullEmojiPicker, setShowFullEmojiPicker] = useState(false);
   const toast = useToast();
 
   if (message.type === 'system') {
@@ -54,10 +93,28 @@ export default function MessageBubble({
     ([, users]) => Array.isArray(users) && users.length > 0
   );
 
-  const handleCopyText = () => {
-    if (!message.text) return;
-    navigator.clipboard?.writeText(message.text);
-    toast.info('Message copied to clipboard');
+  const imageAttachments = (message.attachments || []).filter(
+    (att) => (att.type || '').startsWith('image/') || message.type === 'image'
+  );
+  const hasImage = imageAttachments.length > 0;
+
+  const handleCopyMessage = async () => {
+    try {
+      if (hasImage && message.text) {
+        await copyImageToClipboard(imageAttachments[0]);
+        await navigator.clipboard?.writeText(message.text);
+        toast.success('Text & image copied! Press Ctrl+V in chat to paste.');
+      } else if (hasImage) {
+        await copyImageToClipboard(imageAttachments[0]);
+        toast.success('Image copied! Press Ctrl+V in chat to paste.');
+      } else if (message.text) {
+        window.__mdchatCopiedAttachment = null;
+        await navigator.clipboard?.writeText(message.text);
+        toast.success('Message text copied to clipboard');
+      }
+    } catch {
+      toast.info('Copied to clipboard');
+    }
   };
 
   const renderHighlightedText = (str) => {
@@ -128,7 +185,10 @@ export default function MessageBubble({
       className={`msg-row ${isOwn ? 'msg-row-own' : 'msg-row-incoming'} ${
         message.deleted ? 'msg-row-deleted' : ''
       }`}
-      onMouseLeave={() => setShowReactionTray(false)}
+      onMouseLeave={() => {
+        setShowReactionTray(false);
+        setShowFullEmojiPicker(false);
+      }}
     >
       {!isOwn && (
         <div className="msg-sender-avatar">
@@ -146,7 +206,7 @@ export default function MessageBubble({
         )}
 
         <div className="msg-bubble-wrapper">
-          {/* Quick Floating Actions Toolbar */}
+          {/* Quick Floating Actions Toolbar (Emoji, Reply, Star, Copy Text/Image, Edit Text/Image, Delete) */}
           {!message.deleted && (
             <div className={`msg-hover-toolbar ${isOwn ? 'toolbar-left' : 'toolbar-right'}`}>
               <div className="msg-hover-actions">
@@ -174,36 +234,32 @@ export default function MessageBubble({
                 >
                   <Star size={14} fill={isStarred ? 'currentColor' : 'none'} />
                 </button>
-                {message.text && (
+                {(message.text || hasImage) && (
                   <button
                     type="button"
                     className="msg-action-btn"
-                    onClick={handleCopyText}
-                    title="Copy message"
+                    onClick={handleCopyMessage}
+                    title={hasImage ? 'Copy image / text' : 'Copy text'}
                   >
                     <Copy size={14} />
                   </button>
                 )}
-                {isOwn && (
-                  <>
-                    <button
-                      type="button"
-                      className="msg-action-btn"
-                      onClick={() => onEdit(message)}
-                      title="Edit message"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="msg-action-btn msg-action-danger"
-                      onClick={() => onDelete(message.id)}
-                      title="Delete message"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  className="msg-action-btn"
+                  onClick={() => onEdit(message)}
+                  title={hasImage ? 'Edit image / text' : 'Edit message'}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="msg-action-btn msg-action-danger"
+                  onClick={() => onDelete(message.id)}
+                  title="Delete message"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
 
               {showReactionTray && (
@@ -221,6 +277,28 @@ export default function MessageBubble({
                       {emoji}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className="reaction-tray-emoji"
+                    onClick={() => setShowFullEmojiPicker((v) => !v)}
+                    title="More emojis"
+                    style={{ fontSize: '0.85rem', fontWeight: 700, padding: '0 6px' }}
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+
+              {showFullEmojiPicker && (
+                <div style={{ marginTop: '6px', zIndex: 80 }}>
+                  <EmojiPicker
+                    onSelect={(emoji) => {
+                      onReact(message.id, emoji);
+                      setShowFullEmojiPicker(false);
+                      setShowReactionTray(false);
+                    }}
+                    onClose={() => setShowFullEmojiPicker(false)}
+                  />
                 </div>
               )}
             </div>
@@ -254,12 +332,13 @@ export default function MessageBubble({
                         <div
                           key={att.id || idx}
                           className="msg-image-attachment"
-                          onClick={() => onPreviewImage(att)}
+                          style={{ position: 'relative' }}
                         >
                           <img
                             src={att.url}
                             alt={att.name || 'Attachment'}
                             loading="lazy"
+                            onClick={() => onPreviewImage(att)}
                           />
                         </div>
                       );

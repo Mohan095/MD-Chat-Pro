@@ -29,12 +29,37 @@
           true
         );
 
-        // Disable F12, Ctrl+U (View Source), Ctrl+Shift+I/J/C/K (DevTools), and Ctrl+S (Save Source)
+        // Disable text selection on the website (except inside input and textarea fields)
+        document.addEventListener(
+          'selectstart',
+          function (e) {
+            var tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
+            if (tag !== 'input' && tag !== 'textarea') {
+              e.preventDefault();
+              return false;
+            }
+          },
+          true
+        );
+
+        // Disable dragging images/elements from the page
+        document.addEventListener(
+          'dragstart',
+          function (e) {
+            e.preventDefault();
+            return false;
+          },
+          true
+        );
+
+        // Disable F12, Ctrl+U (View Source), Ctrl+Shift+I/J/C/K (DevTools), and Ctrl+S/A/C on page
         document.addEventListener(
           'keydown',
           function (e) {
             var key = (e.key || '').toLowerCase();
             var code = e.keyCode || e.which;
+            var tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
+            var isInput = tag === 'input' || tag === 'textarea';
 
             // F12
             if (e.key === 'F12' || code === 123) {
@@ -45,6 +70,13 @@
 
             // Ctrl+U / Cmd+U (View Page Source) or Ctrl+S / Cmd+S (Save Page)
             if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (key === 'u' || key === 's' || code === 85 || code === 83)) {
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            }
+
+            // Block Ctrl+A / Ctrl+C outside of input/textarea
+            if (!isInput && (e.ctrlKey || e.metaKey) && !e.shiftKey && (key === 'a' || key === 'c' || code === 65 || code === 67)) {
               e.preventDefault();
               e.stopPropagation();
               return false;

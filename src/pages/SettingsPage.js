@@ -75,7 +75,6 @@ export default function SettingsPage({ initialTab = 'profile' }) {
 
   // 4. Change Password state
   const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [changingPass, setChangingPass] = useState(false);
 
   const handleAvatarChange = async (e) => {
@@ -164,15 +163,10 @@ export default function SettingsPage({ initialTab = 'profile' }) {
       toast.warning('Password must be at least 6 characters long.');
       return;
     }
-    if (newPassword !== confirmPassword) {
-      toast.warning('Passwords do not match.');
-      return;
-    }
     try {
       setChangingPass(true);
       await changePassword(newPassword);
       setNewPassword('');
-      setConfirmPassword('');
       toast.success('Password updated successfully!');
     } catch (err) {
       toast.error(err.message || 'Could not update password.');
@@ -234,6 +228,16 @@ export default function SettingsPage({ initialTab = 'profile' }) {
             >
               <Lock size={18} />
               <span>Change Password</span>
+            </button>
+
+            <button
+              type="button"
+              className="settings-nav-btn"
+              style={{ color: 'var(--color-danger)', marginTop: '8px' }}
+              onClick={() => logout()}
+            >
+              <LogOut size={18} />
+              <span>Log Out</span>
             </button>
           </div>
         </div>
@@ -852,7 +856,7 @@ export default function SettingsPage({ initialTab = 'profile' }) {
             </div>
           )}
 
-          {/* 4. CHANGE PASSWORD (No Firebase details shown) */}
+          {/* 4. CHANGE PASSWORD (No Confirm Password & No Firebase details shown) */}
           {activeTab === 'password' && (
             <div className="settings-section">
               <div className="settings-section-head">
@@ -869,18 +873,6 @@ export default function SettingsPage({ initialTab = 'profile' }) {
                     placeholder="Enter new password (min. 6 characters)"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Confirm New Password</label>
-                  <input
-                    type="password"
-                    className="form-input"
-                    placeholder="Confirm new password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
                     required
                   />
                 </div>
@@ -907,7 +899,7 @@ export default function SettingsPage({ initialTab = 'profile' }) {
                   <button
                     type="button"
                     className="btn btn-danger"
-                    onClick={logout}
+                    onClick={() => logout()}
                   >
                     <LogOut size={16} />
                     <span>Sign Out</span>
