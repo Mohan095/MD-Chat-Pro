@@ -2,26 +2,22 @@ import 'dotenv/config';
 import { MongoClient } from 'mongodb';
 
 const DEFAULT_URI =
-  'mongodb+srv://<db_username>:<db_password>@cluster0.uajeuti.mongodb.net/';
+  'mongodb://mohantn617mca28_db_user:<db_password>@ac-exg6ui3-shard-00-00.uajeuti.mongodb.net:27017,ac-exg6ui3-shard-00-01.uajeuti.mongodb.net:27017,ac-exg6ui3-shard-00-02.uajeuti.mongodb.net:27017/?ssl=true&replicaSet=atlas-8ssukk-shard-0&authSource=admin';
 
 let cachedClient = null;
 let connectPromise = null;
 let indexesEnsured = false;
 
-async function getDb() {
+export async function connectToMongoDB() {
   const uri = process.env.MONGODB_URI || DEFAULT_URI;
-  const dbName = process.env.MONGODB_DB || 'md_chat_pro';
-
   if (!uri || uri.includes('<db_username>') || uri.includes('<db_password>')) {
     throw new Error(
-      'MONGODB_URI is not configured. Set MONGODB_URI in your environment variables with your MongoDB username and password.'
+      'MONGODB_URI is not configured. Replace <db_password> in .env with your MongoDB password.'
     );
   }
-
   if (!cachedClient) {
     cachedClient = new MongoClient(uri);
   }
-
   if (!connectPromise) {
     connectPromise = cachedClient
       .connect()
@@ -31,8 +27,21 @@ async function getDb() {
         throw err;
       });
   }
+  return connectPromise;
+}
 
-  await connectPromise;
+export async function disconnectFromMongoDB() {
+  connectPromise = null;
+  indexesEnsured = false;
+  if (cachedClient) {
+    await cachedClient.close();
+    cachedClient = null;
+  }
+}
+
+async function getDb() {
+  const dbName = process.env.MONGODB_DB || 'md_chat_pro';
+  await connectToMongoDB();
   const db = cachedClient.db(dbName);
 
   if (!indexesEnsured) {
