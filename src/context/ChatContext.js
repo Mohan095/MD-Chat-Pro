@@ -44,6 +44,7 @@ import {
   playNotificationSound,
   showDesktopNotification,
 } from '../services/notificationService';
+import { localStore } from '../services/localStore';
 
 const ChatContext = createContext(null);
 
@@ -68,12 +69,18 @@ export function ChatProvider({ children }) {
   const [showInfoPanel, setShowInfoPanel] = useState(false);
 
   const prevChatsRef = useRef([]);
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
 
   // Subscribe to all users
   useEffect(() => {
     if (!currentUser?.uid) {
       setAllUsers([]);
       return () => {};
+    }
+    const cachedUsers = localStore.getUsers();
+    if (cachedUsers.length > 0) {
+      setAllUsers(cachedUsers);
     }
     return subscribeToAllUsers((users) => {
       setAllUsers(users);
@@ -99,6 +106,13 @@ export function ChatProvider({ children }) {
       return () => {};
     }
 
+    const cachedChats = localStore
+      .getChats()
+      .filter((c) => Array.isArray(c.participants) && c.participants.includes(currentUser.uid));
+    if (cachedChats.length > 0) {
+      setChats(cachedChats);
+    }
+
     return subscribeToUserChats(currentUser.uid, (updatedChats) => {
       const prevChats = prevChatsRef.current;
 
@@ -107,7 +121,7 @@ export function ChatProvider({ children }) {
         if (lastMsg && lastMsg.senderId && lastMsg.senderId !== currentUser.uid) {
           // If this chat is not currently open, mark incoming message as Delivered (✓✓)
           if (
-            chat.id !== activeChatId &&
+            chat.id !== activeChatIdRef.current &&
             !(lastMsg.deliveredTo || []).includes(currentUser.uid)
           ) {
             markChatAsDelivered(chat.id, currentUser.uid);
@@ -121,7 +135,7 @@ export function ChatProvider({ children }) {
               if (currentUser.notificationSettings?.soundEffects !== false) {
                 playNotificationSound('receive');
               }
-              if (chat.id !== activeChatId) {
+              if (chat.id !== activeChatIdRef.current) {
                 const preview =
                   currentUser.notificationSettings?.messagePreview !== false
                     ? lastMsg.text
@@ -143,7 +157,7 @@ export function ChatProvider({ children }) {
       prevChatsRef.current = updatedChats;
       setChats(updatedChats);
     });
-  }, [currentUser?.uid, currentUser?.notificationSettings, activeChatId]);
+  }, [currentUser?.uid, currentUser?.notificationSettings]);
 
   // Subscribe to active chat messages in real time
   useEffect(() => {
@@ -151,6 +165,9 @@ export function ChatProvider({ children }) {
       setMessages([]);
       return () => {};
     }
+
+    const cachedMsgs = localStore.getChatMessages(activeChatId);
+    setMessages(cachedMsgs);
 
     setReplyingTo(null);
     setEditingMessage(null);

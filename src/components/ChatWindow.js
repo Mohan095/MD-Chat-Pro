@@ -221,14 +221,21 @@ export default function ChatWindow({
           <button
             type="button"
             className="icon-btn"
-            onClick={() =>
+            onClick={() => {
+              const peerUid = (activeChat.participants || []).find(
+                (uid) => uid !== currentUser?.uid
+              );
               setActiveCall({
+                direction: 'outgoing',
                 type: 'voice',
+                chatId: activeChat.id,
+                caller: currentUser,
+                calleeUid: peerUid || '',
                 title: activeChat.displayTitle,
                 avatar: activeChat.displayAvatar,
                 isGroup: activeChat.type === 'group',
-              })
-            }
+              });
+            }}
             title="Start voice call"
           >
             <Phone size={18} />
@@ -237,14 +244,21 @@ export default function ChatWindow({
           <button
             type="button"
             className="icon-btn"
-            onClick={() =>
+            onClick={() => {
+              const peerUid = (activeChat.participants || []).find(
+                (uid) => uid !== currentUser?.uid
+              );
               setActiveCall({
+                direction: 'outgoing',
                 type: 'video',
+                chatId: activeChat.id,
+                caller: currentUser,
+                calleeUid: peerUid || '',
                 title: activeChat.displayTitle,
                 avatar: activeChat.displayAvatar,
                 isGroup: activeChat.type === 'group',
-              })
-            }
+              });
+            }}
             title="Start HD video call"
           >
             <Video size={18} />

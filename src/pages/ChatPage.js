@@ -1,16 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, lazy, Suspense, startTransition } from 'react';
 import MainLayout from '../layouts/MainLayout';
 import Sidebar from '../components/Sidebar';
 import ChatWindow from '../components/ChatWindow';
-import UserInfoPanel from '../components/UserInfoPanel';
-import FriendsDirectory from '../components/FriendsDirectory';
-import ProfilePage from './ProfilePage';
-import SettingsPage from './SettingsPage';
-import CreateGroupModal from '../components/CreateGroupModal';
 import { useChat } from '../hooks/useChat';
+import { useAuth } from '../hooks/useAuth';
 import { useResponsive } from '../hooks/useResponsive';
+import { subscribeToIncomingCalls } from '../services/callService';
+
+const UserInfoPanel = lazy(() => import('../components/UserInfoPanel'));
+const FriendsDirectory = lazy(() => import('../components/FriendsDirectory'));
+const ProfilePage = lazy(() => import('./ProfilePage'));
+const SettingsPage = lazy(() => import('./SettingsPage'));
+const CreateGroupModal = lazy(() => import('../components/CreateGroupModal'));
+const CallModal = lazy(() => import('../components/CallModal'));
 
 export default function ChatPage() {
+  const { currentUser } = useAuth();
   const {
     activeChatId,
     setActiveChatId,
@@ -21,14 +26,42 @@ export default function ChatPage() {
 
   const [activeNav, setActiveNav] = useState('chats'); // chats | friends | profile | settings
   const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [incomingCall, setIncomingCall] = useState(null);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setIncomingCall(null);
+      return () => {};
+    }
+    return subscribeToIncomingCalls(currentUser.uid, (callDoc) => {
+      if (!callDoc) {
+        setIncomingCall(null);
+        return;
+      }
+      setIncomingCall({
+        direction: 'incoming',
+        callId: callDoc.id,
+        chatId: callDoc.chatId,
+        type: callDoc.type || 'voice',
+        offer: callDoc.offer,
+        title: callDoc.callerName || 'Incoming Call',
+        avatar: callDoc.callerAvatar || '',
+        isGroup: Boolean(callDoc.isGroup),
+      });
+    });
+  }, [currentUser?.uid]);
 
   const handleSelectNav = (tab) => {
-    setActiveNav(tab);
+    startTransition(() => {
+      setActiveNav(tab);
+    });
   };
 
   const handleSelectChatFromDirectory = (chatId) => {
-    setActiveChatId(chatId);
-    setActiveNav('chats');
+    startTransition(() => {
+      setActiveChatId(chatId);
+      setActiveNav('chats');
+    });
   };
 
   return (
@@ -37,45 +70,59 @@ export default function ChatPage() {
       onSelectNav={handleSelectNav}
       onOpenNewGroup={() => setGroupModalOpen(true)}
     >
-      {activeNav === 'chats' && (
-        <div className="chat-workspace-grid">
-          {/* Show Sidebar on Desktop/Tablet always, or on Mobile when no active chat is open */}
-          {(!isMobile || !activeChatId) && (
-            <Sidebar
-              onOpenNewGroup={() => setGroupModalOpen(true)}
-              onOpenFriends={() => setActiveNav('friends')}
-              onSelectChatMobile={(id) => setActiveChatId(id)}
-            />
-          )}
+      <div
+        className="chat-workspace-grid"
+        style={{ display: activeNav === 'chats' ? undefined : 'none' }}
+      >
+        {/* Show Sidebar on Desktop/Tablet always, or on Mobile when no active chat is open */}
+        {(!isMobile || !activeChatId) && (
+          <Sidebar
+            onOpenNewGroup={() => setGroupModalOpen(true)}
+            onOpenFriends={() => handleSelectNav('friends')}
+            onSelectChatMobile={(id) => setActiveChatId(id)}
+          />
+        )}
 
-          {/* Show ChatWindow on Desktop/Tablet always, or on Mobile when an active chat is selected */}
-          {(!isMobile || activeChatId) && (
-            <ChatWindow
-              onBackMobile={isMobile ? () => setActiveChatId(null) : null}
-              onOpenNewGroup={() => setGroupModalOpen(true)}
-              onOpenFriends={() => setActiveNav('friends')}
-            />
-          )}
+        {/* Show ChatWindow on Desktop/Tablet always, or on Mobile when an active chat is selected */}
+        {(!isMobile || activeChatId) && (
+          <ChatWindow
+            onBackMobile={isMobile ? () => setActiveChatId(null) : null}
+            onOpenNewGroup={() => setGroupModalOpen(true)}
+            onOpenFriends={() => handleSelectNav('friends')}
+          />
+        )}
 
-          {/* Collapsible Right User / Group Info Panel */}
-          {showInfoPanel && activeChatId && (
+        {/* Collapsible Right User / Group Info Panel */}
+        {showInfoPanel && activeChatId && (
+          <Suspense fallback={null}>
             <UserInfoPanel onClose={() => setShowInfoPanel(false)} />
-          )}
-        </div>
-      )}
+          </Suspense>
+        )}
+      </div>
 
-      {activeNav === 'friends' && (
-        <FriendsDirectory onSelectChat={handleSelectChatFromDirectory} />
-      )}
+      <Suspense fallback={null}>
+        {activeNav === 'friends' && (
+          <FriendsDirectory onSelectChat={handleSelectChatFromDirectory} />
+        )}
 
-      {activeNav === 'profile' && <ProfilePage />}
+        {activeNav === 'profile' && <ProfilePage />}
 
-      {activeNav === 'settings' && <SettingsPage />}
+        {activeNav === 'settings' && <SettingsPage />}
 
-      <CreateGroupModal
-        isOpen={groupModalOpen}
-        onClose={() => setGroupModalOpen(false)}
-      />
+        {groupModalOpen && (
+          <CreateGroupModal
+            isOpen={groupModalOpen}
+            onClose={() => setGroupModalOpen(false)}
+          />
+        )}
+
+        {incomingCall && (
+          <CallModal
+            callState={incomingCall}
+            onEndCall={() => setIncomingCall(null)}
+          />
+        )}
+      </Suspense>
     </MainLayout>
   );
 }

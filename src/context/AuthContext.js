@@ -13,13 +13,25 @@ import { subscribeToUserProfile, updateUserProfile } from '../services/userServi
 import { initPresenceTracking } from '../services/presenceService';
 import { uploadProfileAvatar } from '../services/storageService';
 import { isFirebaseConfigured } from '../firebase/config';
+import { localStore } from '../services/localStore';
 
 const AuthContext = createContext(null);
 
+function getCachedSessionUser() {
+  try {
+    const uid = localStore.getSessionUid();
+    if (!uid) return null;
+    return localStore.getUsers().find((u) => u.uid === uid) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [authUser, setAuthUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cachedUser = getCachedSessionUser();
+  const [authUser, setAuthUser] = useState(cachedUser);
+  const [userProfile, setUserProfile] = useState(cachedUser);
+  const [loading, setLoading] = useState(!cachedUser);
 
   useEffect(() => {
     let profileUnsub = null;
