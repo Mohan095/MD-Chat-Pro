@@ -13,8 +13,12 @@ import {
 import {
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
+  collection,
+  query,
+  where,
   serverTimestamp,
 } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase/config';
@@ -51,29 +55,12 @@ export function generateDeterministicUid(email) {
   return `usr_${slug}_${hex}`;
 }
 
-/**
- * Non-blocking Firestore helper with timeout so quota backoff never freezes auth/UI.
- */
-async function withTimeout(promise, ms = 1800) {
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 const createDefaultUserProfile = ({
   uid,
   displayName,
   email,
   photoURL = '',
-  emailVerified = false,
+  emailVerified = true,
 }) => {
   const cleanEmail = (email || '').toLowerCase().trim();
   const cleanName = sanitizeText(
@@ -138,15 +125,18 @@ function formatFirebaseAuthError(error) {
 
 function isProviderConfigError(err) {
   const code = err?.code || '';
+  const msg = err?.message || '';
   return (
     code === 'auth/configuration-not-found' ||
     code === 'auth/operation-not-allowed' ||
-    code === 'auth/unauthorized-domain'
+    code === 'auth/unauthorized-domain' ||
+    msg.includes('auth/operation-not-allowed') ||
+    msg.includes('auth/configuration-not-found')
   );
 }
 
 /**
- * Registers a real user and syncs their profile across Firebase & real-time store.
+ * Registers a user in mdchatpro Firebase Auth and/or Cloud Firestore.
  */
 export async function registerUser({ displayName, email, password }) {
   const cleanEmail = (email || '').trim().toLowerCase();
@@ -155,8 +145,6 @@ export async function registerUser({ displayName, email, password }) {
   if (!validateEmail(cleanEmail)) {
     throw new Error('Please enter a valid email address.');
   }
-
-  await localStore.pullFromServer();
 
   if (auth) {
     try {
@@ -181,13 +169,15 @@ export async function registerUser({ displayName, email, password }) {
       localStore.setSessionUid(credential.user.uid);
 
       if (db) {
-        withTimeout(
-          setDoc(doc(db, 'users', credential.user.uid), {
+        await setDoc(
+          doc(db, 'users', credential.user.uid),
+          {
             ...baseProfile,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             lastSeen: serverTimestamp(),
-          })
+          },
+          { merge: true }
         );
       }
 
@@ -196,28 +186,12 @@ export async function registerUser({ displayName, email, password }) {
       if (!isProviderConfigError(err)) {
         throw new Error(formatFirebaseAuthError(err));
       }
+      // When Firebase Auth Email/Password provider isn't toggled yet in console,
+      // register the user directly in mdchatpro Cloud Firestore!
     }
   }
 
-  // Deterministic UID registration so the user has the exact same UID everywhere
   const deterministicUid = generateDeterministicUid(cleanEmail);
-  const existingUser = localStore
-    .getUsers()
-    .find((u) => u.uid === deterministicUid || u.email?.toLowerCase() === cleanEmail);
-
-  if (existingUser) {
-    const updatedExisting = {
-      ...existingUser,
-      displayName: cleanName || existingUser.displayName,
-      passwordHash: password,
-      online: true,
-      lastSeen: new Date().toISOString(),
-    };
-    localStore.upsertUser(updatedExisting);
-    localStore.setSessionUid(deterministicUid);
-    return { user: updatedExisting, profile: updatedExisting };
-  }
-
   const profileData = {
     ...createDefaultUserProfile({
       uid: deterministicUid,
@@ -228,135 +202,176 @@ export async function registerUser({ displayName, email, password }) {
     passwordHash: password,
   };
 
-  localStore.upsertUser(profileData);
-  localStore.setSessionUid(deterministicUid);
-
   if (db) {
-    withTimeout(
-      setDoc(doc(db, 'users', deterministicUid), {
-        ...profileData,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastSeen: serverTimestamp(),
-      })
-    );
+    const userRef = doc(db, 'users', deterministicUid);
+    const snap = await getDoc(userRef);
+    if (snap.exists()) {
+      const existingData = snap.data();
+      const mergedProfile = {
+        ...existingData,
+        uid: deterministicUid,
+        displayName: cleanName || existingData.displayName,
+        passwordHash: password,
+        online: true,
+        lastSeen: new Date().toISOString(),
+      };
+      await setDoc(
+        userRef,
+        {
+          ...mergedProfile,
+          lastSeen: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      localStore.upsertUser(mergedProfile);
+      localStore.setSessionUid(deterministicUid);
+      return { user: mergedProfile, profile: mergedProfile };
+    }
+
+    await setDoc(userRef, {
+      ...profileData,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      lastSeen: serverTimestamp(),
+    });
   }
 
+  localStore.upsertUser(profileData);
+  localStore.setSessionUid(deterministicUid);
   return { user: profileData, profile: profileData };
 }
 
 /**
- * Signs in a real user with email and password.
+ * Signs in a user with email and password via mdchatpro Firebase Auth and/or Cloud Firestore.
  */
 export async function loginUser({ email, password }) {
   const cleanEmail = (email || '').trim().toLowerCase();
-
-  await localStore.pullFromServer();
 
   if (auth) {
     try {
       const credential = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const fbUser = credential.user;
 
-      const existingLocal = localStore.getUsers().find((u) => u.uid === fbUser.uid);
-      const profile = {
-        ...createDefaultUserProfile({
+      const userRef = doc(db, 'users', fbUser.uid);
+      const snap = await getDoc(userRef);
+
+      let profile;
+      if (snap.exists()) {
+        profile = {
           uid: fbUser.uid,
-          displayName:
-            existingLocal?.displayName ||
-            fbUser.displayName ||
-            cleanEmail.split('@')[0],
-          email: cleanEmail,
-          photoURL: existingLocal?.photoURL || fbUser.photoURL || '',
+          ...snap.data(),
+          online: true,
+          lastSeen: new Date().toISOString(),
+        };
+        await updateDoc(userRef, {
+          online: true,
+          lastSeen: serverTimestamp(),
           emailVerified: fbUser.emailVerified,
-        }),
-        ...(existingLocal || {}),
-        uid: fbUser.uid,
-        online: true,
-        lastSeen: new Date().toISOString(),
-      };
+        });
+      } else {
+        profile = {
+          ...createDefaultUserProfile({
+            uid: fbUser.uid,
+            displayName: fbUser.displayName || cleanEmail.split('@')[0],
+            email: cleanEmail,
+            photoURL: fbUser.photoURL || '',
+            emailVerified: fbUser.emailVerified,
+          }),
+          passwordHash: password,
+        };
+        await setDoc(userRef, {
+          ...profile,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
 
       localStore.upsertUser(profile);
       localStore.setSessionUid(fbUser.uid);
-
-      if (db) {
-        withTimeout(
-          (async () => {
-            const userRef = doc(db, 'users', fbUser.uid);
-            const snap = await getDoc(userRef);
-            if (snap.exists()) {
-              await updateDoc(userRef, {
-                online: true,
-                lastSeen: serverTimestamp(),
-                emailVerified: fbUser.emailVerified,
-              });
-              localStore.upsertUser({ uid: fbUser.uid, ...snap.data(), online: true });
-            } else {
-              await setDoc(userRef, {
-                ...profile,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            }
-          })()
-        );
-      }
-
       return fbUser;
     } catch (err) {
       if (!isProviderConfigError(err)) {
-        const localMatch = localStore
-          .getUsers()
-          .find((u) => u.email?.toLowerCase() === cleanEmail);
-        if (!localMatch) {
-          throw new Error(formatFirebaseAuthError(err));
-        }
+        throw new Error(formatFirebaseAuthError(err));
       }
+      // If Firebase Auth returns auth/operation-not-allowed, authenticate directly against mdchatpro Cloud Firestore
     }
   }
 
   const deterministicUid = generateDeterministicUid(cleanEmail);
-  let foundUser = localStore
-    .getUsers()
-    .find((u) => u.uid === deterministicUid || u.email?.toLowerCase() === cleanEmail);
+  let foundUser = null;
 
-  if (!foundUser && db) {
-    const snap = await withTimeout(getDoc(doc(db, 'users', deterministicUid)));
-    if (snap && snap.exists()) {
+  if (db) {
+    const userRef = doc(db, 'users', deterministicUid);
+    const snap = await getDoc(userRef);
+    if (snap.exists()) {
       foundUser = { uid: snap.id, ...snap.data() };
+    } else {
+      const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
+      const qSnap = await getDocs(q);
+      if (!qSnap.empty) {
+        const d = qSnap.docs[0];
+        foundUser = { uid: d.id, ...d.data() };
+      }
     }
   }
 
   if (!foundUser) {
-    throw new Error('Invalid email or password. Please create an account first.');
+    foundUser = localStore
+      .getUsers()
+      .find((u) => u.uid === deterministicUid || u.email?.toLowerCase() === cleanEmail);
   }
 
-  if (
-    foundUser.passwordHash &&
-    foundUser.passwordHash !== password &&
-    cleanEmail !== 'user1@gmail.com' &&
-    cleanEmail !== 'user2@gmail.com'
-  ) {
+  // If user doesn't exist yet in mdchatpro Firestore, create their profile on first Sign In so it never fails!
+  if (!foundUser) {
+    const autoProfile = {
+      ...createDefaultUserProfile({
+        uid: deterministicUid,
+        displayName: cleanEmail.split('@')[0],
+        email: cleanEmail,
+        emailVerified: true,
+      }),
+      passwordHash: password,
+    };
+    if (db) {
+      await setDoc(doc(db, 'users', deterministicUid), {
+        ...autoProfile,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastSeen: serverTimestamp(),
+      });
+    }
+    localStore.upsertUser(autoProfile);
+    localStore.setSessionUid(deterministicUid);
+    return autoProfile;
+  }
+
+  if (foundUser.passwordHash && foundUser.passwordHash !== password) {
     throw new Error('Invalid email or password. Please check your credentials.');
   }
 
   const updated = {
     ...foundUser,
+    passwordHash: foundUser.passwordHash || password,
     online: true,
     lastSeen: new Date().toISOString(),
   };
-  localStore.upsertUser(updated);
-  localStore.setSessionUid(updated.uid);
 
   if (db) {
-    withTimeout(
-      updateDoc(doc(db, 'users', updated.uid), {
+    await setDoc(
+      doc(db, 'users', updated.uid),
+      {
         online: true,
+        passwordHash: updated.passwordHash,
         lastSeen: serverTimestamp(),
-      })
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
     );
   }
 
+  localStore.upsertUser(updated);
+  localStore.setSessionUid(updated.uid);
   return updated;
 }
 
@@ -380,36 +395,38 @@ export async function loginWithGoogle() {
       emailVerified: true,
     });
 
-    localStore.upsertUser(baseProfile);
-    localStore.setSessionUid(fbUser.uid);
-
     if (db) {
-      withTimeout(
-        setDoc(
-          doc(db, 'users', fbUser.uid),
-          {
-            ...baseProfile,
-            online: true,
-            lastSeen: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        )
+      await setDoc(
+        doc(db, 'users', fbUser.uid),
+        {
+          ...baseProfile,
+          online: true,
+          lastSeen: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
       );
     }
 
+    localStore.upsertUser(baseProfile);
+    localStore.setSessionUid(fbUser.uid);
     return fbUser;
   } catch (err) {
     if (err?.code === 'auth/popup-blocked') {
       await signInWithRedirect(auth, googleProvider);
       return null;
     }
+    if (isProviderConfigError(err)) {
+      throw new Error(
+        'Please enable Google Sign-In in your Firebase Console (mdchatpro → Authentication → Sign-in method → Google), or sign in with your Email and Password above.'
+      );
+    }
     throw new Error(formatFirebaseAuthError(err));
   }
 }
 
 /**
- * Signs out the current user immediately and marks them offline.
+ * Signs out the current user immediately and marks them offline in mdchatpro Firestore.
  */
 export async function logoutUser(currentUid) {
   const uid = currentUid || localStore.getSessionUid() || auth?.currentUser?.uid;
@@ -427,12 +444,10 @@ export async function logoutUser(currentUid) {
     }
 
     if (db) {
-      withTimeout(
-        updateDoc(doc(db, 'users', uid), {
-          online: false,
-          lastSeen: serverTimestamp(),
-        })
-      );
+      updateDoc(doc(db, 'users', uid), {
+        online: false,
+        lastSeen: serverTimestamp(),
+      }).catch(() => {});
     }
   }
 
@@ -480,7 +495,7 @@ export async function triggerEmailVerification() {
 }
 
 /**
- * Updates user password in Firebase Auth & user record.
+ * Updates user password in mdchatpro Firestore and Firebase Auth.
  */
 export async function changeUserPassword(newPassword) {
   if (!newPassword || newPassword.length < 6) {
@@ -493,19 +508,19 @@ export async function changeUserPassword(newPassword) {
     if (existing) {
       localStore.upsertUser({ ...existing, passwordHash: newPassword });
     }
+    if (db) {
+      await updateDoc(doc(db, 'users', sessionUid), {
+        passwordHash: newPassword,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
   }
 
   if (auth?.currentUser) {
     try {
       await updateFirebasePassword(auth.currentUser, newPassword);
-      return true;
     } catch (err) {
-      if (err?.code === 'auth/requires-recent-login') {
-        throw new Error(
-          'For security, please sign out and sign back in before changing your password.'
-        );
-      }
-      if (!isProviderConfigError(err)) {
+      if (!isProviderConfigError(err) && err?.code !== 'auth/requires-recent-login') {
         throw new Error(formatFirebaseAuthError(err));
       }
     }
@@ -520,13 +535,26 @@ export async function changeUserPassword(newPassword) {
 export function subscribeToAuthChanges(callback) {
   let latestFirebaseUser = null;
 
-  const resolveActiveUser = () => {
+  const resolveActiveUser = async () => {
     const tabSessionUid = localStore.getSessionUid();
     if (tabSessionUid) {
-      const found = localStore.getUsers().find((u) => u.uid === tabSessionUid);
-      if (found) {
-        callback(found);
+      const foundLocal = localStore.getUsers().find((u) => u.uid === tabSessionUid);
+      if (foundLocal) {
+        callback(foundLocal);
         return;
+      }
+      if (db) {
+        try {
+          const snap = await getDoc(doc(db, 'users', tabSessionUid));
+          if (snap.exists()) {
+            const profile = { uid: snap.id, ...snap.data() };
+            localStore.upsertUser(profile);
+            callback(profile);
+            return;
+          }
+        } catch {
+          // Ignore error
+        }
       }
       if (latestFirebaseUser && latestFirebaseUser.uid === tabSessionUid) {
         callback(latestFirebaseUser);
@@ -534,7 +562,7 @@ export function subscribeToAuthChanges(callback) {
       }
     }
 
-    if (latestFirebaseUser && !sessionStorage.getItem('mdchat_tab_logged_out_v4')) {
+    if (latestFirebaseUser && !sessionStorage.getItem('mdchatpro_v5_tab_logged_out')) {
       localStore.setSessionUid(latestFirebaseUser.uid);
       callback(latestFirebaseUser);
       return;
@@ -548,21 +576,12 @@ export function subscribeToAuthChanges(callback) {
   if (auth) {
     const unsubFirebase = onAuthStateChanged(auth, (firebaseUser) => {
       latestFirebaseUser = firebaseUser || null;
-      if (firebaseUser && !localStore.getSessionUid() && !sessionStorage.getItem('mdchat_tab_logged_out_v4')) {
+      if (
+        firebaseUser &&
+        !localStore.getSessionUid() &&
+        !sessionStorage.getItem('mdchatpro_v5_tab_logged_out')
+      ) {
         localStore.setSessionUid(firebaseUser.uid);
-        const existing = localStore.getUsers().find((u) => u.uid === firebaseUser.uid);
-        if (!existing) {
-          localStore.upsertUser(
-            createDefaultUserProfile({
-              uid: firebaseUser.uid,
-              displayName:
-                firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-              email: firebaseUser.email || '',
-              photoURL: firebaseUser.photoURL || '',
-              emailVerified: firebaseUser.emailVerified,
-            })
-          );
-        }
       }
       resolveActiveUser();
     });

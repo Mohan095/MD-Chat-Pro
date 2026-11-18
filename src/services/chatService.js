@@ -13,7 +13,7 @@ import {
   arrayUnion,
   arrayRemove,
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../firebase/config';
+import { db } from '../firebase/config';
 import { localStore } from './localStore';
 import { sanitizeText, messageRateLimiter } from '../utils/security';
 import { toDate } from '../utils/formatters';
@@ -28,27 +28,6 @@ export function generateConversationId(uid1, uid2) {
   return [a, b].sort().join('_');
 }
 
-/**
- * Non-blocking Firestore helper with timeout so quota exhaustion or offline network
- * never blocks instant real-time message delivery.
- */
-async function withFirestoreTimeout(promise, ms = 1800) {
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Extracts a numeric timestamp (ms) from a message or chat object for deterministic sorting.
- */
 function getTimestampMs(item) {
   if (!item) return 0;
   if (typeof item.createdAtMs === 'number') return item.createdAtMs;
@@ -58,11 +37,6 @@ function getTimestampMs(item) {
   return toDate(raw).getTime();
 }
 
-/**
- * Sorts conversations for a user: pinned chats first, then newest activity first.
- * Also deduplicates direct conversations for the same user pair so both users always
- * see one unified conversation thread.
- */
 function sortAndDedupeChatsForUser(chats, uid) {
   const byPairOrId = new Map();
 
@@ -106,123 +80,69 @@ function sortAndDedupeChatsForUser(chats, uid) {
 }
 
 /**
- * Subscribes in real time to all conversations where `uid` is a participant.
+ * Subscribes in real time to all conversations where `uid` is a participant in mdchatpro Firestore.
  */
 export function subscribeToUserChats(uid, callback) {
-  if (!uid) return () => {};
+  if (!uid || !db) return () => {};
 
-  let firestoreChats = [];
+  const q = query(
+    collection(db, 'chats'),
+    where('participants', 'array-contains', uid)
+  );
 
-  const emitMerged = () => {
-    const map = new Map();
-    const localChats = localStore
-      .getChats()
-      .filter((c) => (c.participants || []).includes(uid));
-    localChats.forEach((c) => {
-      if (c?.id) map.set(c.id, c);
-    });
-    firestoreChats.forEach((c) => {
-      if (c?.id) map.set(c.id, { ...(map.get(c.id) || {}), ...c });
-    });
-    callback(sortAndDedupeChatsForUser(Array.from(map.values()), uid));
-  };
-
-  const unsubLocal = localStore.subscribe(emitMerged);
-
-  if (isFirebaseConfigured && db) {
-    const q = query(
-      collection(db, 'chats'),
-      where('participants', 'array-contains', uid)
-    );
-
-    const unsubFirestore = onSnapshot(
-      q,
-      { includeMetadataChanges: true },
-      (snap) => {
-        firestoreChats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        if (firestoreChats.length > 0) {
-          localStore.saveChats(firestoreChats);
-        }
-        emitMerged();
-      },
-      () => {
-        emitMerged();
-      }
-    );
-
-    return () => {
-      unsubFirestore();
-      unsubLocal();
-    };
-  }
-
-  emitMerged();
-  return unsubLocal;
+  return onSnapshot(
+    q,
+    { includeMetadataChanges: true },
+    (snap) => {
+      const firestoreChats = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      localStore.saveChats(firestoreChats);
+      callback(sortAndDedupeChatsForUser(firestoreChats, uid));
+    },
+    (err) => {
+      console.error('[chatService] subscribeToUserChats error:', err);
+    }
+  );
 }
 
 /**
- * Subscribes in real time to all messages in `chats/{chatId}/messages`.
+ * Subscribes in real time to all messages in `chats/{chatId}/messages` in mdchatpro Firestore.
  * Deduplicates by message ID and sorts chronologically.
  */
 export function subscribeToChatMessages(chatId, callback) {
-  if (!chatId) {
+  if (!chatId || !db) {
     callback([]);
     return () => {};
   }
 
-  let firestoreMsgs = [];
+  const msgsCollectionRef = collection(db, 'chats', chatId, 'messages');
 
-  const emitMerged = () => {
-    const map = new Map();
-    localStore.getChatMessages(chatId).forEach((m) => {
-      if (m?.id) map.set(m.id, m);
-    });
-    firestoreMsgs.forEach((m) => {
-      if (m?.id) map.set(m.id, { ...(map.get(m.id) || {}), ...m });
-    });
+  return onSnapshot(
+    msgsCollectionRef,
+    { includeMetadataChanges: true },
+    (snap) => {
+      const map = new Map();
+      snap.docs.forEach((d) => {
+        map.set(d.id, { id: d.id, ...d.data() });
+      });
 
-    const sorted = Array.from(map.values()).sort((a, b) => {
-      const timeA = getTimestampMs(a);
-      const timeB = getTimestampMs(b);
-      if (timeA !== timeB) return timeA - timeB;
-      return String(a.id).localeCompare(String(b.id));
-    });
+      const sorted = Array.from(map.values()).sort((a, b) => {
+        const timeA = getTimestampMs(a);
+        const timeB = getTimestampMs(b);
+        if (timeA !== timeB) return timeA - timeB;
+        return String(a.id).localeCompare(String(b.id));
+      });
 
-    callback(sorted);
-  };
-
-  const unsubLocal = localStore.subscribe(emitMerged);
-
-  if (isFirebaseConfigured && db) {
-    const msgsCollectionRef = collection(db, 'chats', chatId, 'messages');
-
-    const unsubFirestore = onSnapshot(
-      msgsCollectionRef,
-      { includeMetadataChanges: true },
-      (snap) => {
-        firestoreMsgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        if (firestoreMsgs.length > 0) {
-          localStore.saveChatMessages(chatId, firestoreMsgs);
-        }
-        emitMerged();
-      },
-      () => {
-        emitMerged();
-      }
-    );
-
-    return () => {
-      unsubFirestore();
-      unsubLocal();
-    };
-  }
-
-  emitMerged();
-  return unsubLocal;
+      localStore.saveChatMessages(chatId, sorted);
+      callback(sorted);
+    },
+    (err) => {
+      console.error('[chatService] subscribeToChatMessages error:', err);
+    }
+  );
 }
 
 /**
- * Loads or creates the unique 1-to-1 conversation for a pair of users immediately.
+ * Loads or creates the unique 1-to-1 conversation in mdchatpro Firestore.
  * Always uses the canonical conversation ID: generateConversationId(currentUser.uid, targetUser.uid).
  */
 export async function getOrCreateDirectChat(currentUser, targetUser) {
@@ -230,16 +150,18 @@ export async function getOrCreateDirectChat(currentUser, targetUser) {
     throw new Error('Both participants are required to start a chat.');
   }
 
-  await localStore.pullFromServer();
-
   const canonicalId = generateConversationId(currentUser.uid, targetUser.uid);
   const participants = [currentUser.uid, targetUser.uid].sort();
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
 
-  const existingLocal = localStore.getChats().find((c) => c.id === canonicalId);
-  if (existingLocal) {
-    return existingLocal;
+  const chatRef = doc(db, 'chats', canonicalId);
+  const snap = await getDoc(chatRef);
+
+  if (snap.exists()) {
+    const existing = { id: snap.id, ...snap.data() };
+    localStore.upsertChat(existing);
+    return existing;
   }
 
   const newChatObj = {
@@ -276,41 +198,19 @@ export async function getOrCreateDirectChat(currentUser, targetUser) {
     lastMessage: null,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
-    createdAt: nowIso,
-    updatedAt: nowIso,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   };
 
-  // Save immediately to real-time store (0ms response + pushes to /api/realtime)
-  localStore.upsertChat(newChatObj);
+  await setDoc(chatRef, newChatObj, { merge: true });
 
-  // Sync to Firestore in background without blocking
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const chatRef = doc(db, 'chats', canonicalId);
-        const snap = await getDoc(chatRef);
-        if (!snap.exists()) {
-          await setDoc(
-            chatRef,
-            {
-              ...newChatObj,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        } else {
-          localStore.upsertChat({ id: snap.id, ...snap.data() });
-        }
-      })()
-    );
-  }
-
-  return newChatObj;
+  const localObj = { ...newChatObj, createdAt: nowIso, updatedAt: nowIso };
+  localStore.upsertChat(localObj);
+  return localObj;
 }
 
 /**
- * Creates a new group conversation with multiple members.
+ * Creates a new group conversation in mdchatpro Firestore.
  */
 export async function createGroupChat({
   name,
@@ -338,18 +238,12 @@ export async function createGroupChat({
   const nowIso = new Date(nowMs).toISOString();
   const systemText = `${creator.displayName} created group "${cleanName}"`;
 
-  const groupRef =
-    isFirebaseConfigured && db ? doc(collection(db, 'chats')) : null;
-  const chatId =
-    groupRef?.id || `group_${nowMs}_${Math.random().toString(36).slice(2, 6)}`;
-  const msgRef =
-    isFirebaseConfigured && db
-      ? doc(collection(db, 'chats', chatId, 'messages'))
-      : null;
-  const sysMsgId = msgRef?.id || `msg_sys_${nowMs}`;
+  const groupRef = doc(collection(db, 'chats'));
+  const chatId = groupRef.id;
+  const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
 
   const systemMsg = {
-    id: sysMsgId,
+    id: msgRef.id,
     chatId,
     senderId: creator.uid,
     receiverId: 'group',
@@ -368,7 +262,7 @@ export async function createGroupChat({
     deleted: false,
     createdAtMs: nowMs,
     createdAtIso: nowIso,
-    createdAt: nowIso,
+    createdAt: serverTimestamp(),
   };
 
   const newGroup = {
@@ -400,37 +294,21 @@ export async function createGroupChat({
     },
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
-    createdAt: nowIso,
-    updatedAt: nowIso,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   };
 
-  localStore.upsertChat(newGroup);
-  localStore.saveChatMessages(chatId, [systemMsg]);
-
-  if (isFirebaseConfigured && db && groupRef && msgRef) {
-    withFirestoreTimeout(
-      Promise.all([
-        setDoc(groupRef, {
-          ...newGroup,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        }),
-        setDoc(msgRef, {
-          ...systemMsg,
-          createdAt: serverTimestamp(),
-        }),
-      ])
-    );
-  }
+  await setDoc(groupRef, newGroup);
+  await setDoc(msgRef, systemMsg);
 
   return newGroup;
 }
 
 /**
- * Updates group details (name, description, avatar, participants).
+ * Updates group details (name, description, avatar, participants) in mdchatpro Firestore.
  */
 export async function updateGroupDetails(chatId, updates) {
-  if (!chatId) return;
+  if (!chatId || !db) return;
   const cleanUpdates = { ...updates };
   if (typeof cleanUpdates.name === 'string') {
     cleanUpdates.name = sanitizeText(cleanUpdates.name, 60);
@@ -439,31 +317,15 @@ export async function updateGroupDetails(chatId, updates) {
     cleanUpdates.description = sanitizeText(cleanUpdates.description, 240);
   }
 
-  const chats = localStore.getChats();
-  const idx = chats.findIndex((c) => c.id === chatId);
-  if (idx !== -1) {
-    const updated = {
-      ...chats[idx],
-      ...cleanUpdates,
-      updatedAtMs: Date.now(),
-      updatedAt: new Date().toISOString(),
-    };
-    localStore.upsertChat(updated);
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId), {
-        ...cleanUpdates,
-        updatedAtMs: Date.now(),
-        updatedAt: serverTimestamp(),
-      })
-    );
-  }
+  await updateDoc(doc(db, 'chats', chatId), {
+    ...cleanUpdates,
+    updatedAtMs: Date.now(),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /**
- * Sends a real-time message in a conversation.
+ * Sends a real-time message in a conversation in mdchatpro Firestore.
  * Stores senderId (UID), receiverId (UID), participants, text, timestamp, and status ('sent').
  */
 export async function sendMessage({
@@ -503,13 +365,16 @@ export async function sendMessage({
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
 
-  const existingLocalChat = localStore.getChats().find((c) => c.id === chatId);
+  const chatRef = doc(db, 'chats', chatId);
+  const chatSnap = await getDoc(chatRef);
+  const existingChatData = chatSnap.exists() ? chatSnap.data() : null;
+
   let participants =
-    Array.isArray(passedParticipants) && passedParticipants.length >= 2
+    Array.isArray(existingChatData?.participants) &&
+    existingChatData.participants.length >= 2
+      ? [...existingChatData.participants]
+      : Array.isArray(passedParticipants) && passedParticipants.length >= 2
       ? [...passedParticipants]
-      : Array.isArray(existingLocalChat?.participants) &&
-        existingLocalChat.participants.length >= 2
-      ? [...existingLocalChat.participants]
       : [];
 
   if (participants.length < 2 && receiverUid) {
@@ -522,18 +387,14 @@ export async function sendMessage({
 
   const resolvedReceiverId =
     receiverUid ||
-    (existingLocalChat?.type === 'group'
+    (existingChatData?.type === 'group'
       ? 'group'
       : participants.find((id) => id !== sender.uid) || sender.uid);
 
-  const msgRef =
-    isFirebaseConfigured && db
-      ? doc(collection(db, 'chats', chatId, 'messages'))
-      : null;
-  const messageId =
-    msgRef?.id || `msg_${nowMs}_${Math.random().toString(36).slice(2, 7)}`;
+  const msgRef = doc(collection(db, 'chats', chatId, 'messages'));
+  const messageId = msgRef.id;
 
-  const baseMessage = {
+  const messagePayload = {
     id: messageId,
     chatId,
     senderId: sender.uid,
@@ -560,10 +421,10 @@ export async function sendMessage({
     deleted: false,
     createdAtMs: nowMs,
     createdAtIso: nowIso,
-    createdAt: nowIso,
+    createdAt: serverTimestamp(),
   };
 
-  const baseUnread = existingLocalChat?.unreadCount || {};
+  const baseUnread = existingChatData?.unreadCount || {};
   const updatedUnread = { ...baseUnread };
   participants.forEach((uid) => {
     if (uid !== sender.uid) {
@@ -573,7 +434,7 @@ export async function sendMessage({
     }
   });
 
-  const updatedTyping = { ...(existingLocalChat?.typing || {}) };
+  const updatedTyping = { ...(existingChatData?.typing || {}) };
   delete updatedTyping[sender.uid];
 
   const lastMessageObj = {
@@ -590,262 +451,132 @@ export async function sendMessage({
     readBy: [sender.uid],
   };
 
-  // 1. Update real-time store & push to /api/realtime + BroadcastChannel in 0ms
-  const localMessages = localStore
-    .getChatMessages(chatId)
-    .filter((m) => m.id !== messageId);
-  localMessages.push(baseMessage);
-  localStore.saveChatMessages(chatId, localMessages);
+  await Promise.all([
+    setDoc(msgRef, messagePayload),
+    setDoc(
+      chatRef,
+      {
+        id: chatId,
+        type: existingChatData?.type || 'direct',
+        participants,
+        lastMessage: lastMessageObj,
+        unreadCount: updatedUnread,
+        typing: updatedTyping,
+        updatedAtMs: nowMs,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
 
-  const updatedChatObj = {
-    ...(existingLocalChat || {
-      id: chatId,
-      type: 'direct',
-      name: '',
-      description: '',
-      avatar: '',
-      adminIds: [],
-      createdBy: sender.uid,
-      pinnedBy: [],
-      mutedBy: [],
-      archivedBy: [],
-      createdAtMs: nowMs,
-      createdAt: nowIso,
-    }),
-    id: chatId,
-    participants,
-    lastMessage: lastMessageObj,
-    unreadCount: updatedUnread,
-    typing: updatedTyping,
-    updatedAtMs: nowMs,
-    updatedAt: nowIso,
-  };
-  localStore.upsertChat(updatedChatObj);
-
-  // 2. Persist to Firebase Cloud Firestore in parallel
-  if (isFirebaseConfigured && db && msgRef) {
-    const chatRef = doc(db, 'chats', chatId);
-    withFirestoreTimeout(
-      Promise.all([
-        setDoc(
-          chatRef,
-          {
-            ...updatedChatObj,
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        ),
-        setDoc(msgRef, {
-          ...baseMessage,
-          createdAt: serverTimestamp(),
-        }),
-      ])
-    );
-  }
-
-  return baseMessage;
+  return { ...messagePayload, createdAt: nowIso };
 }
 
 /**
- * Marks incoming messages in a conversation as Delivered (✓✓) when the receiver's client receives them.
+ * Marks incoming messages in a conversation as Delivered (✓✓) in mdchatpro Firestore.
  */
 export async function markChatAsDelivered(chatId, receiverUid) {
-  if (!chatId || !receiverUid) return;
+  if (!chatId || !receiverUid || !db) return;
 
-  const chats = localStore.getChats();
-  const chatIdx = chats.findIndex((c) => c.id === chatId);
-  if (chatIdx !== -1) {
-    const chat = chats[chatIdx];
-    const lastMsg = chat.lastMessage;
-    if (
-      lastMsg &&
-      lastMsg.senderId !== receiverUid &&
-      !(lastMsg.deliveredTo || []).includes(receiverUid)
-    ) {
-      const dSet = new Set(lastMsg.deliveredTo || []);
-      dSet.add(receiverUid);
-      chat.lastMessage = {
-        ...lastMsg,
-        deliveredTo: Array.from(dSet),
-        status: lastMsg.status === 'read' ? 'read' : 'delivered',
-      };
-      localStore.upsertChat(chat);
-    }
-  }
-
-  const messages = localStore.getChatMessages(chatId);
-  let msgsChanged = false;
-  messages.forEach((m) => {
-    if (
-      m.senderId !== receiverUid &&
-      !(m.deliveredTo || []).includes(receiverUid)
-    ) {
-      const dSet = new Set(m.deliveredTo || []);
-      dSet.add(receiverUid);
-      m.deliveredTo = Array.from(dSet);
-      if (m.status !== 'read') m.status = 'delivered';
-      msgsChanged = true;
-    }
-  });
-  if (msgsChanged) {
-    localStore.saveChatMessages(chatId, messages);
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const chatRef = doc(db, 'chats', chatId);
-        const chatSnap = await getDoc(chatRef);
-        if (chatSnap.exists()) {
-          const data = chatSnap.data();
-          const lastMsg = data.lastMessage;
-          if (
-            lastMsg &&
-            lastMsg.senderId !== receiverUid &&
-            !(lastMsg.deliveredTo || []).includes(receiverUid)
-          ) {
-            const nextStatus = lastMsg.status === 'read' ? 'read' : 'delivered';
-            await updateDoc(chatRef, {
-              'lastMessage.deliveredTo': arrayUnion(receiverUid),
-              'lastMessage.status': nextStatus,
-            });
-          }
-        }
-
-        const msgsSnap = await getDocs(collection(db, 'chats', chatId, 'messages'));
-        const updates = [];
-        msgsSnap.docs.forEach((d) => {
-          const m = d.data();
-          if (
-            m.senderId !== receiverUid &&
-            !(m.deliveredTo || []).includes(receiverUid)
-          ) {
-            const nextStatus = m.status === 'read' ? 'read' : 'delivered';
-            updates.push(
-              updateDoc(doc(db, 'chats', chatId, 'messages', d.id), {
-                deliveredTo: arrayUnion(receiverUid),
-                status: nextStatus,
-              })
-            );
-          }
+  try {
+    const chatRef = doc(db, 'chats', chatId);
+    const chatSnap = await getDoc(chatRef);
+    if (chatSnap.exists()) {
+      const data = chatSnap.data();
+      const lastMsg = data.lastMessage;
+      if (
+        lastMsg &&
+        lastMsg.senderId !== receiverUid &&
+        !(lastMsg.deliveredTo || []).includes(receiverUid)
+      ) {
+        const nextStatus = lastMsg.status === 'read' ? 'read' : 'delivered';
+        await updateDoc(chatRef, {
+          'lastMessage.deliveredTo': arrayUnion(receiverUid),
+          'lastMessage.status': nextStatus,
         });
-        if (updates.length > 0) {
-          await Promise.all(updates);
-        }
-      })()
-    );
-  }
-}
-
-/**
- * Marks all messages in a conversation as Read (✓✓ blue ticks) by `uid` and resets their unread counter to 0.
- */
-export async function markChatAsRead(chatId, uid, sendReadReceipts = true) {
-  if (!chatId || !uid) return;
-
-  const chats = localStore.getChats();
-  const chatIdx = chats.findIndex((c) => c.id === chatId);
-  if (chatIdx !== -1) {
-    const chat = { ...chats[chatIdx] };
-    let chatModified = false;
-
-    if ((chat.unreadCount?.[uid] || 0) > 0) {
-      chat.unreadCount = { ...(chat.unreadCount || {}), [uid]: 0 };
-      chatModified = true;
-    }
-
-    if (sendReadReceipts && chat.lastMessage && chat.lastMessage.senderId !== uid) {
-      const rSet = new Set(chat.lastMessage.readBy || []);
-      const dSet = new Set(chat.lastMessage.deliveredTo || []);
-      if (!rSet.has(uid) || chat.lastMessage.status !== 'read') {
-        rSet.add(uid);
-        dSet.add(uid);
-        chat.lastMessage = {
-          ...chat.lastMessage,
-          readBy: Array.from(rSet),
-          deliveredTo: Array.from(dSet),
-          status: 'read',
-        };
-        chatModified = true;
       }
     }
 
-    if (chatModified) {
-      localStore.upsertChat(chat);
-    }
-  }
-
-  if (sendReadReceipts) {
-    const messages = localStore.getChatMessages(chatId);
-    let changed = false;
-    messages.forEach((m) => {
-      if (m.senderId !== uid && (!(m.readBy || []).includes(uid) || m.status !== 'read')) {
-        const rSet = new Set(m.readBy || []);
-        rSet.add(uid);
-        const dSet = new Set(m.deliveredTo || []);
-        dSet.add(uid);
-        m.readBy = Array.from(rSet);
-        m.deliveredTo = Array.from(dSet);
-        m.status = 'read';
-        changed = true;
+    const msgsSnap = await getDocs(collection(db, 'chats', chatId, 'messages'));
+    const updates = [];
+    msgsSnap.docs.forEach((d) => {
+      const m = d.data();
+      if (
+        m.senderId !== receiverUid &&
+        !(m.deliveredTo || []).includes(receiverUid)
+      ) {
+        const nextStatus = m.status === 'read' ? 'read' : 'delivered';
+        updates.push(
+          updateDoc(doc(db, 'chats', chatId, 'messages', d.id), {
+            deliveredTo: arrayUnion(receiverUid),
+            status: nextStatus,
+          })
+        );
       }
     });
-    if (changed) {
-      localStore.saveChatMessages(chatId, messages);
+    if (updates.length > 0) {
+      await Promise.all(updates);
     }
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const chatRef = doc(db, 'chats', chatId);
-        const chatSnap = await getDoc(chatRef);
-        if (chatSnap.exists()) {
-          const chatData = chatSnap.data();
-          const chatUpdates = {
-            [`unreadCount.${uid}`]: 0,
-          };
-          if (
-            sendReadReceipts &&
-            chatData.lastMessage &&
-            chatData.lastMessage.senderId !== uid
-          ) {
-            chatUpdates['lastMessage.readBy'] = arrayUnion(uid);
-            chatUpdates['lastMessage.deliveredTo'] = arrayUnion(uid);
-            chatUpdates['lastMessage.status'] = 'read';
-          }
-          await updateDoc(chatRef, chatUpdates);
-        }
-
-        if (sendReadReceipts) {
-          const msgsSnap = await getDocs(collection(db, 'chats', chatId, 'messages'));
-          const batchPromises = [];
-          msgsSnap.docs.forEach((d) => {
-            const data = d.data();
-            if (
-              data.senderId !== uid &&
-              (!(data.readBy || []).includes(uid) || data.status !== 'read')
-            ) {
-              batchPromises.push(
-                updateDoc(doc(db, 'chats', chatId, 'messages', d.id), {
-                  readBy: arrayUnion(uid),
-                  deliveredTo: arrayUnion(uid),
-                  status: 'read',
-                })
-              );
-            }
-          });
-          if (batchPromises.length > 0) {
-            await Promise.all(batchPromises);
-          }
-        }
-      })()
-    );
+  } catch {
+    // Ignore transient delivery update error
   }
 }
 
 /**
- * Edits an existing message (supports editing text, replacing/removing image attachments, or both).
+ * Marks all messages in a conversation as Read (✓✓ blue ticks) in mdchatpro Firestore.
+ */
+export async function markChatAsRead(chatId, uid, sendReadReceipts = true) {
+  if (!chatId || !uid || !db) return;
+
+  try {
+    const chatRef = doc(db, 'chats', chatId);
+    const chatSnap = await getDoc(chatRef);
+    if (chatSnap.exists()) {
+      const chatData = chatSnap.data();
+      const chatUpdates = {
+        [`unreadCount.${uid}`]: 0,
+      };
+      if (
+        sendReadReceipts &&
+        chatData.lastMessage &&
+        chatData.lastMessage.senderId !== uid
+      ) {
+        chatUpdates['lastMessage.readBy'] = arrayUnion(uid);
+        chatUpdates['lastMessage.deliveredTo'] = arrayUnion(uid);
+        chatUpdates['lastMessage.status'] = 'read';
+      }
+      await updateDoc(chatRef, chatUpdates);
+    }
+
+    if (sendReadReceipts) {
+      const msgsSnap = await getDocs(collection(db, 'chats', chatId, 'messages'));
+      const batchPromises = [];
+      msgsSnap.docs.forEach((d) => {
+        const data = d.data();
+        if (
+          data.senderId !== uid &&
+          (!(data.readBy || []).includes(uid) || data.status !== 'read')
+        ) {
+          batchPromises.push(
+            updateDoc(doc(db, 'chats', chatId, 'messages', d.id), {
+              readBy: arrayUnion(uid),
+              deliveredTo: arrayUnion(uid),
+              status: 'read',
+            })
+          );
+        }
+      });
+      if (batchPromises.length > 0) {
+        await Promise.all(batchPromises);
+      }
+    }
+  } catch (err) {
+    console.error('[chatService] markChatAsRead error:', err);
+  }
+}
+
+/**
+ * Edits an existing message in mdchatpro Firestore.
  */
 export async function editMessage({
   chatId,
@@ -874,289 +605,159 @@ export async function editMessage({
       ? `📎 ${newAttachments[0].name}`
       : 'Edited message');
 
-  const messages = localStore.getChatMessages(chatId);
-  const idx = messages.findIndex((m) => m.id === messageId);
-  if (idx !== -1) {
-    messages[idx] = {
-      ...messages[idx],
-      text: cleanText,
-      ...(newAttachments !== undefined
-        ? { attachments: newAttachments, type: nextType }
-        : {}),
-      edited: true,
-      editedAt: new Date().toISOString(),
-    };
-    localStore.saveChatMessages(chatId, messages);
+  const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+  const updatePayload = {
+    text: cleanText,
+    edited: true,
+    editedAt: serverTimestamp(),
+  };
+  if (newAttachments !== undefined) {
+    updatePayload.attachments = newAttachments;
+    updatePayload.type = nextType;
   }
+  await updateDoc(msgRef, updatePayload);
 
-  const chats = localStore.getChats();
-  const chatIdx = chats.findIndex((c) => c.id === chatId);
-  if (chatIdx !== -1 && chats[chatIdx].lastMessage?.id === messageId) {
-    const updatedChat = {
-      ...chats[chatIdx],
-      lastMessage: {
-        ...chats[chatIdx].lastMessage,
-        text: previewText,
-        type: nextType,
-      },
-    };
-    localStore.upsertChat(updatedChat);
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
-        const updatePayload = {
-          text: cleanText,
-          edited: true,
-          editedAt: serverTimestamp(),
-        };
-        if (newAttachments !== undefined) {
-          updatePayload.attachments = newAttachments;
-          updatePayload.type = nextType;
-        }
-        await updateDoc(msgRef, updatePayload);
-      })()
-    );
-  }
-}
-
-/**
- * Deletes a message (text and/or image).
- */
-export async function deleteMessage({ chatId, messageId }) {
-  if (!chatId || !messageId) return;
-
-  const messages = localStore.getChatMessages(chatId);
-  const idx = messages.findIndex((m) => m.id === messageId);
-  if (idx !== -1) {
-    messages[idx] = {
-      ...messages[idx],
-      text: 'This message was deleted',
-      attachments: [],
-      deleted: true,
-      deletedAt: new Date().toISOString(),
-    };
-    localStore.saveChatMessages(chatId, messages);
-  }
-
-  const chats = localStore.getChats();
-  const chatIdx = chats.findIndex((c) => c.id === chatId);
-  if (chatIdx !== -1 && chats[chatIdx].lastMessage?.id === messageId) {
-    localStore.upsertChat({
-      ...chats[chatIdx],
-      lastMessage: {
-        ...chats[chatIdx].lastMessage,
-        text: '🚫 This message was deleted',
-      },
+  const chatRef = doc(db, 'chats', chatId);
+  const chatSnap = await getDoc(chatRef);
+  if (chatSnap.exists() && chatSnap.data().lastMessage?.id === messageId) {
+    await updateDoc(chatRef, {
+      'lastMessage.text': previewText,
+      'lastMessage.type': nextType,
     });
   }
+}
 
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
-        text: 'This message was deleted',
-        attachments: [],
-        deleted: true,
-        deletedAt: serverTimestamp(),
-      })
-    );
+/**
+ * Deletes a message in mdchatpro Firestore.
+ */
+export async function deleteMessage({ chatId, messageId }) {
+  if (!chatId || !messageId || !db) return;
+
+  await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
+    text: 'This message was deleted',
+    attachments: [],
+    deleted: true,
+    deletedAt: serverTimestamp(),
+  });
+
+  const chatRef = doc(db, 'chats', chatId);
+  const chatSnap = await getDoc(chatRef);
+  if (chatSnap.exists() && chatSnap.data().lastMessage?.id === messageId) {
+    await updateDoc(chatRef, {
+      'lastMessage.text': '🚫 This message was deleted',
+    });
   }
 }
 
 /**
- * Toggles an emoji reaction on a message.
+ * Toggles an emoji reaction on a message in mdchatpro Firestore.
  */
 export async function toggleMessageReaction({ chatId, messageId, uid, emoji }) {
-  if (!chatId || !messageId || !uid || !emoji) return;
+  if (!chatId || !messageId || !uid || !emoji || !db) return;
 
-  const messages = localStore.getChatMessages(chatId);
-  const idx = messages.findIndex((m) => m.id === messageId);
-  let nextReactions = {};
+  const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+  const snap = await getDoc(msgRef);
+  if (!snap.exists()) return;
 
-  if (idx !== -1) {
-    const currentReactions = { ...(messages[idx].reactions || {}) };
-    const usersForEmoji = new Set(currentReactions[emoji] || []);
+  const currentReactions = { ...(snap.data().reactions || {}) };
+  const usersForEmoji = new Set(currentReactions[emoji] || []);
 
-    if (usersForEmoji.has(uid)) {
-      usersForEmoji.delete(uid);
-    } else {
-      usersForEmoji.add(uid);
-    }
-
-    if (usersForEmoji.size === 0) {
-      delete currentReactions[emoji];
-    } else {
-      currentReactions[emoji] = Array.from(usersForEmoji);
-    }
-
-    messages[idx].reactions = currentReactions;
-    nextReactions = currentReactions;
-    localStore.saveChatMessages(chatId, messages);
+  if (usersForEmoji.has(uid)) {
+    usersForEmoji.delete(uid);
+  } else {
+    usersForEmoji.add(uid);
   }
 
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
-        reactions: nextReactions,
-      })
-    );
+  if (usersForEmoji.size === 0) {
+    delete currentReactions[emoji];
+  } else {
+    currentReactions[emoji] = Array.from(usersForEmoji);
   }
+
+  await updateDoc(msgRef, { reactions: currentReactions });
 }
 
 /**
- * Toggles starring a message.
+ * Toggles starring a message in mdchatpro Firestore.
  */
 export async function toggleStarMessage({ chatId, messageId, uid }) {
-  if (!chatId || !messageId || !uid) return;
+  if (!chatId || !messageId || !uid || !db) return;
 
-  const messages = localStore.getChatMessages(chatId);
-  const idx = messages.findIndex((m) => m.id === messageId);
-  let isNowStarred = false;
-
-  if (idx !== -1) {
-    const starred = new Set(messages[idx].starredBy || []);
-    if (starred.has(uid)) {
-      starred.delete(uid);
-      isNowStarred = false;
-    } else {
-      starred.add(uid);
-      isNowStarred = true;
-    }
-    messages[idx].starredBy = Array.from(starred);
-    localStore.saveChatMessages(chatId, messages);
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
-        starredBy: isNowStarred ? arrayUnion(uid) : arrayRemove(uid),
-      })
-    );
-  }
+  const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+  const snap = await getDoc(msgRef);
+  if (!snap.exists()) return;
+  const starred = snap.data().starredBy || [];
+  const isStarred = starred.includes(uid);
+  await updateDoc(msgRef, {
+    starredBy: isStarred ? arrayRemove(uid) : arrayUnion(uid),
+  });
 }
 
 /**
- * Sets or clears typing status for a user in a chat.
+ * Sets or clears typing status for a user in a chat in mdchatpro Firestore.
  */
 export async function setTypingStatus(chatId, uid, isTyping) {
-  if (!chatId || !uid) return;
+  if (!chatId || !uid || !db) return;
 
-  const chats = localStore.getChats();
-  const idx = chats.findIndex((c) => c.id === chatId);
-  if (idx !== -1) {
-    const typing = { ...(chats[idx].typing || {}) };
-    if (isTyping) {
-      typing[uid] = Date.now();
-    } else {
-      delete typing[uid];
-    }
-    localStore.upsertChat({ ...chats[idx], typing });
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId), {
-        [`typing.${uid}`]: isTyping ? Date.now() : null,
-      })
-    );
-  }
+  const chatRef = doc(db, 'chats', chatId);
+  await updateDoc(chatRef, {
+    [`typing.${uid}`]: isTyping ? Date.now() : null,
+  }).catch(() => {});
 }
 
 /**
- * Toggles pinning, muting, or archiving a chat for a specific user.
+ * Toggles pinning, muting, or archiving a chat for a specific user in mdchatpro Firestore.
  */
 export async function toggleChatFlag(chatId, uid, field = 'pinnedBy') {
-  if (!chatId || !uid) return false;
+  if (!chatId || !uid || !db) return false;
   const allowedFields = ['pinnedBy', 'mutedBy', 'archivedBy'];
   if (!allowedFields.includes(field)) return false;
 
-  const chats = localStore.getChats();
-  const idx = chats.findIndex((c) => c.id === chatId);
-  if (idx === -1) return false;
-
-  const set = new Set(chats[idx][field] || []);
-  let added = false;
-  if (set.has(uid)) {
-    set.delete(uid);
-  } else {
-    set.add(uid);
-    added = true;
-  }
-  const updated = { ...chats[idx], [field]: Array.from(set) };
-  localStore.upsertChat(updated);
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      updateDoc(doc(db, 'chats', chatId), {
-        [field]: added ? arrayUnion(uid) : arrayRemove(uid),
-      })
-    );
-  }
-
-  return added;
+  const chatRef = doc(db, 'chats', chatId);
+  const snap = await getDoc(chatRef);
+  if (!snap.exists()) return false;
+  const list = snap.data()[field] || [];
+  const has = list.includes(uid);
+  await updateDoc(chatRef, {
+    [field]: has ? arrayRemove(uid) : arrayUnion(uid),
+  });
+  return !has;
 }
 
 /**
- * Clears all messages in a conversation.
+ * Clears all messages in a conversation in mdchatpro Firestore.
  */
 export async function clearChatMessages(chatId) {
-  if (!chatId) return;
+  if (!chatId || !db) return;
 
-  localStore.saveChatMessages(chatId, []);
-  localStore.pushToServer({ clearChatId: chatId });
-
-  const chats = localStore.getChats();
-  const idx = chats.findIndex((c) => c.id === chatId);
-  if (idx !== -1) {
-    localStore.upsertChat({ ...chats[idx], lastMessage: null });
-  }
-
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const snap = await getDocs(collection(db, 'chats', chatId, 'messages'));
-        await Promise.all(
-          snap.docs.map((d) => deleteDoc(doc(db, 'chats', chatId, 'messages', d.id)))
-        );
-        await updateDoc(doc(db, 'chats', chatId), {
-          lastMessage: null,
-          updatedAtMs: Date.now(),
-          updatedAt: serverTimestamp(),
-        });
-      })()
-    );
-  }
+  const snap = await getDocs(collection(db, 'chats', chatId, 'messages'));
+  await Promise.all(
+    snap.docs.map((d) => deleteDoc(doc(db, 'chats', chatId, 'messages', d.id)))
+  );
+  await updateDoc(doc(db, 'chats', chatId), {
+    lastMessage: null,
+    updatedAtMs: Date.now(),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /**
- * Deletes a conversation or removes user from group.
+ * Deletes a conversation or removes user from group in mdchatpro Firestore.
  */
 export async function deleteOrLeaveChat(chatId, uid) {
-  if (!chatId || !uid) return;
+  if (!chatId || !uid || !db) return;
 
-  const chats = localStore.getChats().filter((c) => c.id !== chatId);
-  localStore.saveChats(chats);
-  localStore.pushToServer({ deleteChatId: chatId });
+  const chatRef = doc(db, 'chats', chatId);
+  const snap = await getDoc(chatRef);
+  if (!snap.exists()) return;
+  const data = snap.data();
 
-  if (isFirebaseConfigured && db) {
-    withFirestoreTimeout(
-      (async () => {
-        const chatRef = doc(db, 'chats', chatId);
-        const snap = await getDoc(chatRef);
-        if (!snap.exists()) return;
-        const data = snap.data();
-
-        if (data.type === 'group' && (data.participants || []).length > 2) {
-          await updateDoc(chatRef, {
-            participants: arrayRemove(uid),
-            adminIds: arrayRemove(uid),
-          });
-        } else {
-          await deleteDoc(chatRef);
-        }
-      })()
-    );
+  if (data.type === 'group' && (data.participants || []).length > 2) {
+    await updateDoc(chatRef, {
+      participants: arrayRemove(uid),
+      adminIds: arrayRemove(uid),
+    });
+  } else {
+    await deleteDoc(chatRef);
   }
 }

@@ -11,103 +11,64 @@ import {
   arrayRemove,
 } from 'firebase/firestore';
 import { updateProfile as updateFirebaseAuthProfile } from 'firebase/auth';
-import { auth, db, isFirebaseConfigured } from '../firebase/config';
+import { auth, db } from '../firebase/config';
 import { localStore } from './localStore';
 import { sanitizeText } from '../utils/security';
 
 /**
- * Subscribes to a single real user profile document in real time.
+ * Subscribes to a single user profile document in mdchatpro Cloud Firestore in real time.
  */
 export function subscribeToUserProfile(uid, callback) {
-  if (!uid) return () => {};
+  if (!uid || !db) return () => {};
 
-  const emitLocal = () => {
-    const users = localStore.getUsers();
-    const found = users.find((u) => u.uid === uid) || null;
-    callback(found ? { ...found } : null);
-  };
-
-  if (isFirebaseConfigured && db) {
-    return onSnapshot(
-      doc(db, 'users', uid),
-      (snap) => {
-        if (snap.exists()) {
-          const data = { uid: snap.id, ...snap.data() };
-          localStore.upsertUser(data);
-          callback(data);
-        } else {
-          emitLocal();
-        }
-      },
-      () => {
-        emitLocal();
+  return onSnapshot(
+    doc(db, 'users', uid),
+    (snap) => {
+      if (snap.exists()) {
+        const data = { uid: snap.id, ...snap.data() };
+        localStore.upsertUser(data);
+        callback(data);
+      } else {
+        const found = localStore.getUsers().find((u) => u.uid === uid) || null;
+        callback(found);
       }
-    );
-  }
-
-  emitLocal();
-  return localStore.subscribe(emitLocal);
+    },
+    (err) => {
+      console.error('[userService] subscribeToUserProfile error:', err);
+    }
+  );
 }
 
 /**
- * Subscribes to all real registered users in real time (merges Firestore users with local mirror).
+ * Subscribes to all registered users in mdchatpro Cloud Firestore in real time.
  */
 export function subscribeToAllUsers(callback) {
-  let firestoreUsers = [];
+  if (!db) return () => {};
 
-  const emitMerged = () => {
-    const map = new Map();
-    localStore.getUsers().forEach((u) => {
-      if (u?.uid) map.set(u.uid, u);
-    });
-    firestoreUsers.forEach((u) => {
-      if (u?.uid) map.set(u.uid, { ...(map.get(u.uid) || {}), ...u });
-    });
-    callback(Array.from(map.values()));
-  };
-
-  const unsubLocal = localStore.subscribe(emitMerged);
-
-  if (isFirebaseConfigured && db) {
-    const unsubFirestore = onSnapshot(
-      collection(db, 'users'),
-      (snap) => {
-        firestoreUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
-        emitMerged();
-      },
-      () => {
-        emitMerged();
-      }
-    );
-    return () => {
-      unsubFirestore();
-      unsubLocal();
-    };
-  }
-
-  emitMerged();
-  return unsubLocal;
+  return onSnapshot(
+    collection(db, 'users'),
+    (snap) => {
+      const firestoreUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+      localStore.saveUsers(firestoreUsers);
+      callback(firestoreUsers);
+    },
+    (err) => {
+      console.error('[userService] subscribeToAllUsers error:', err);
+    }
+  );
 }
 
 /**
- * Fetches a user profile by UID.
+ * Fetches a user profile by UID from mdchatpro Cloud Firestore.
  */
 export async function getUserById(uid) {
-  if (!uid) return null;
-  if (isFirebaseConfigured && db) {
-    try {
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) return { uid: snap.id, ...snap.data() };
-    } catch {
-      // Fallback to local
-    }
-  }
-  const users = localStore.getUsers();
-  return users.find((u) => u.uid === uid) || null;
+  if (!uid || !db) return null;
+  const snap = await getDoc(doc(db, 'users', uid));
+  return snap.exists() ? { uid: snap.id, ...snap.data() } : null;
 }
 
 /**
- * Updates user profile fields in Firestore and local mirror.
+ * Updates user profile fields in mdchatpro Cloud Firestore.
  */
 export async function updateUserProfile(uid, updates) {
   if (!uid) throw new Error('User ID is required.');
@@ -134,29 +95,25 @@ export async function updateUserProfile(uid, updates) {
     updatedAt: new Date().toISOString(),
   });
 
-  if (isFirebaseConfigured && db) {
-    try {
-      const userRef = doc(db, 'users', uid);
-      await setDoc(
-        userRef,
-        {
-          uid,
-          ...cleanUpdates,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+  if (db) {
+    const userRef = doc(db, 'users', uid);
+    await setDoc(
+      userRef,
+      {
+        uid,
+        ...cleanUpdates,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
 
-      if (auth?.currentUser && auth.currentUser.uid === uid) {
-        const authProfilePatch = {};
-        if (cleanUpdates.displayName) authProfilePatch.displayName = cleanUpdates.displayName;
-        if (cleanUpdates.photoURL !== undefined) authProfilePatch.photoURL = cleanUpdates.photoURL;
-        if (Object.keys(authProfilePatch).length > 0) {
-          await updateFirebaseAuthProfile(auth.currentUser, authProfilePatch);
-        }
-      }
-    } catch (err) {
-      console.warn('[userService] Firestore update warning:', err);
+  if (auth?.currentUser && auth.currentUser.uid === uid) {
+    const authProfilePatch = {};
+    if (cleanUpdates.displayName) authProfilePatch.displayName = cleanUpdates.displayName;
+    if (cleanUpdates.photoURL !== undefined) authProfilePatch.photoURL = cleanUpdates.photoURL;
+    if (Object.keys(authProfilePatch).length > 0) {
+      await updateFirebaseAuthProfile(auth.currentUser, authProfilePatch).catch(() => {});
     }
   }
 
@@ -164,21 +121,14 @@ export async function updateUserProfile(uid, updates) {
 }
 
 /**
- * Searches real registered users by displayName, username, or email.
+ * Searches registered users in mdchatpro Cloud Firestore.
  */
 export async function searchUsers(searchTerm, currentUid) {
   const term = (searchTerm || '').trim().toLowerCase();
+  if (!db) return [];
 
-  let allUsers = localStore.getUsers();
-  if (isFirebaseConfigured && db) {
-    try {
-      const snap = await getDocs(collection(db, 'users'));
-      const remote = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
-      if (remote.length > 0) allUsers = remote;
-    } catch {
-      // Use local mirror
-    }
-  }
+  const snap = await getDocs(collection(db, 'users'));
+  const allUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
 
   return allUsers
     .filter((u) => u.uid !== currentUid)
@@ -194,53 +144,25 @@ export async function searchUsers(searchTerm, currentUid) {
 }
 
 /**
- * Blocks a user.
+ * Blocks a user in mdchatpro Cloud Firestore.
  */
 export async function blockUser(currentUid, targetUid) {
-  if (!currentUid || !targetUid) return;
+  if (!currentUid || !targetUid || !db) return;
 
-  const users = localStore.getUsers();
-  const idx = users.findIndex((u) => u.uid === currentUid);
-  if (idx !== -1) {
-    const blocked = new Set(users[idx].blockedUsers || []);
-    blocked.add(targetUid);
-    users[idx].blockedUsers = Array.from(blocked);
-    localStore.saveUsers(users);
-  }
-
-  if (isFirebaseConfigured && db) {
-    try {
-      await updateDoc(doc(db, 'users', currentUid), {
-        blockedUsers: arrayUnion(targetUid),
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
-      // Ignore if Firestore rules pending
-    }
-  }
+  await updateDoc(doc(db, 'users', currentUid), {
+    blockedUsers: arrayUnion(targetUid),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /**
- * Unblocks a user.
+ * Unblocks a user in mdchatpro Cloud Firestore.
  */
 export async function unblockUser(currentUid, targetUid) {
-  if (!currentUid || !targetUid) return;
+  if (!currentUid || !targetUid || !db) return;
 
-  const users = localStore.getUsers();
-  const idx = users.findIndex((u) => u.uid === currentUid);
-  if (idx !== -1) {
-    users[idx].blockedUsers = (users[idx].blockedUsers || []).filter((id) => id !== targetUid);
-    localStore.saveUsers(users);
-  }
-
-  if (isFirebaseConfigured && db) {
-    try {
-      await updateDoc(doc(db, 'users', currentUid), {
-        blockedUsers: arrayRemove(targetUid),
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
-      // Ignore if Firestore rules pending
-    }
-  }
+  await updateDoc(doc(db, 'users', currentUid), {
+    blockedUsers: arrayRemove(targetUid),
+    updatedAt: serverTimestamp(),
+  });
 }

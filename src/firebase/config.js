@@ -6,15 +6,15 @@ import { getDatabase } from 'firebase/database';
 import { getMessaging, isSupported as isMessagingSupported } from 'firebase/messaging';
 import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 
-// Official mdchatpro Firebase Configuration
+// Official md-chat-pro Firebase Configuration
 export const firebaseConfig = {
-  apiKey: 'AIzaSyAQmNN8pj5HOAaraT8-arZoVpn6FgFEXRQ',
-  authDomain: 'mdchatpro.firebaseapp.com',
-  projectId: 'mdchatpro',
-  storageBucket: 'mdchatpro.firebasestorage.app',
-  messagingSenderId: '561164399873',
-  appId: '1:561164399873:web:5a39c774380ac715b39700',
-  measurementId: 'G-ZVPEQ9K6ZE',
+  apiKey: 'AIzaSyBK_f7FCzXlwp3ZXtN0-8MgAamsTtYh35Y',
+  authDomain: 'md-chat-pro.firebaseapp.com',
+  projectId: 'md-chat-pro',
+  storageBucket: 'md-chat-pro.firebasestorage.app',
+  messagingSenderId: '173037702593',
+  appId: '1:173037702593:web:374bb5b13b113a63b0f340',
+  measurementId: 'G-JHVZBZ7PHW',
 };
 
 export const vapidKey = '';
