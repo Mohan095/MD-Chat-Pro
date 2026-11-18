@@ -12,6 +12,7 @@ import {
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { localStore } from './localStore';
@@ -333,6 +334,8 @@ export async function sendMessage({
   sender,
   receiverUid = '',
   participants: passedParticipants = [],
+  existingChat = null,
+  onOptimistic = null,
   text = '',
   type = 'text',
   attachments = [],
@@ -366,8 +369,15 @@ export async function sendMessage({
   const nowIso = new Date(nowMs).toISOString();
 
   const chatRef = doc(db, 'chats', chatId);
-  const chatSnap = await getDoc(chatRef);
-  const existingChatData = chatSnap.exists() ? chatSnap.data() : null;
+  let existingChatData = existingChat;
+  if (!existingChatData) {
+    try {
+      const chatSnap = await getDoc(chatRef);
+      existingChatData = chatSnap.exists() ? chatSnap.data() : null;
+    } catch {
+      existingChatData = null;
+    }
+  }
 
   let participants =
     Array.isArray(existingChatData?.participants) &&
@@ -451,25 +461,34 @@ export async function sendMessage({
     readBy: [sender.uid],
   };
 
-  await Promise.all([
-    setDoc(msgRef, messagePayload),
-    setDoc(
-      chatRef,
-      {
-        id: chatId,
-        type: existingChatData?.type || 'direct',
-        participants,
-        lastMessage: lastMessageObj,
-        unreadCount: updatedUnread,
-        typing: updatedTyping,
-        updatedAtMs: nowMs,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    ),
-  ]);
+  const optimisticMsg = { ...messagePayload, createdAt: nowIso };
+  const existingLocalMsgs = localStore.getChatMessages(chatId);
+  localStore.saveChatMessages(chatId, [...existingLocalMsgs, optimisticMsg]);
 
-  return { ...messagePayload, createdAt: nowIso };
+  if (onOptimistic) {
+    onOptimistic(optimisticMsg, lastMessageObj);
+  }
+
+  const batch = writeBatch(db);
+  batch.set(msgRef, messagePayload);
+  batch.set(
+    chatRef,
+    {
+      id: chatId,
+      type: existingChatData?.type || 'direct',
+      participants,
+      lastMessage: lastMessageObj,
+      unreadCount: updatedUnread,
+      typing: updatedTyping,
+      updatedAtMs: nowMs,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
+
+  return optimisticMsg;
 }
 
 /**

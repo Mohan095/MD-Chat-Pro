@@ -346,7 +346,7 @@ export function ChatProvider({ children }) {
             ''
           : 'group';
 
-      const sent = await sendMessage({
+      const sendPromise = sendMessage({
         chatId: activeChat.id,
         sender: currentUser,
         receiverUid,
@@ -354,6 +354,25 @@ export function ChatProvider({ children }) {
           activeChat.participants?.length >= 2
             ? activeChat.participants
             : [currentUser.uid, receiverUid].filter(Boolean),
+        existingChat: activeChat,
+        onOptimistic: (optimisticMsg, lastMessageObj) => {
+          setMessages((prev) =>
+            prev.some((m) => m.id === optimisticMsg.id)
+              ? prev
+              : [...prev, optimisticMsg]
+          );
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === activeChat.id
+                ? {
+                    ...c,
+                    lastMessage: lastMessageObj,
+                    updatedAtMs: optimisticMsg.createdAtMs,
+                  }
+                : c
+            )
+          );
+        },
         text,
         type,
         attachments,
@@ -365,7 +384,11 @@ export function ChatProvider({ children }) {
       }
       setReplyingTo(null);
 
-      return sent;
+      sendPromise.catch((err) => {
+        toast.error(err?.message || 'Failed to sync message to cloud.');
+      });
+
+      return true;
     },
     [activeChat, currentUser, replyingTo, toast]
   );

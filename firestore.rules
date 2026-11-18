@@ -101,7 +101,10 @@ service cloud.firestore {
 
         allow create: if isAuthenticated()
           && request.resource.data.senderId == request.auth.uid
-          && isChatParticipant(chatId);
+          && (
+            isChatParticipant(chatId) ||
+            (request.resource.data.participants is list && request.auth.uid in request.resource.data.participants)
+          );
 
         // Sender can edit/delete message; receiver/participants can update status, readBy, deliveredTo, reactions, starredBy
         allow update: if isAuthenticated() && (

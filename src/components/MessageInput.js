@@ -233,8 +233,10 @@ export default function MessageInput({
         clearSelectedFile();
         setText('');
       } else {
-        await onSendMessage({ text: text.trim(), type: 'text' });
+        const messageText = text.trim();
         setText('');
+        setShowEmojiPicker(false);
+        await onSendMessage({ text: messageText, type: 'text' });
       }
       setShowEmojiPicker(false);
     } catch (err) {
