@@ -2,6 +2,7 @@ import { defineConfig, transformWithEsbuild } from 'vite';
 import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
+import mongoHandler from './api/mongo.js';
 
 const DB_FILE = path.resolve(process.cwd(), '.realtime-db.json');
 
@@ -56,6 +57,10 @@ function realtimeSyncPlugin() {
   return {
     name: 'md-chat-pro-realtime-sync',
     configureServer(server) {
+      server.middlewares.use('/api/mongo', (req, res) => {
+        mongoHandler(req, res);
+      });
+
       server.middlewares.use('/api/realtime', (req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
