@@ -1,11 +1,8 @@
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage, isFirebaseConfigured } from '../firebase/config';
-import { isLocalDemoUid } from './authService';
 import { validateFileUpload } from '../utils/security';
 
 /**
  * Converts an image or file into a compact Data URL (compressing images via canvas
- * so they store cleanly in Firestore / localStore and can be copied to clipboard without CORS issues).
+ * so they store cleanly in MongoDB without Firebase Storage).
  */
 export function fileToDataUrl(file, maxDimension = 960) {
   return new Promise((resolve, reject) => {
@@ -47,53 +44,7 @@ export function fileToDataUrl(file, maxDimension = 960) {
 }
 
 /**
- * Helper that races a Firebase Storage upload against a short timeout so CORS or
- * unconfigured Storage rules on localhost never hang the upload UI.
- */
-async function tryFirebaseUploadWithTimeout(storagePath, file, onProgress, timeoutMs = 1800) {
-  if (!isFirebaseConfigured || !storage) return null;
-
-  const uploadTask = uploadBytesResumable(ref(storage, storagePath), file);
-
-  const uploadPromise = new Promise((resolve, reject) => {
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-        if (onProgress && pct > 0) onProgress(pct);
-      },
-      (error) => reject(error),
-      async () => {
-        try {
-          const url = await getDownloadURL(uploadTask.snapshot.ref);
-          resolve(url);
-        } catch (err) {
-          reject(err);
-        }
-      }
-    );
-  });
-
-  const timeoutPromise = new Promise((resolve) => {
-    setTimeout(() => {
-      try {
-        uploadTask.cancel();
-      } catch {
-        // Ignore cancel error
-      }
-      resolve(null);
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([uploadPromise, timeoutPromise]);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Uploads a user profile picture (`avatars/{uid}/{filename}`) with instant optimized fallback.
+ * Optimizes a user profile avatar into a compact Data URL for MongoDB storage.
  */
 export async function uploadProfileAvatar(uid, file, onProgress) {
   const validation = validateFileUpload(file, 'avatar');
@@ -103,69 +54,28 @@ export async function uploadProfileAvatar(uid, file, onProgress) {
 
   if (onProgress) onProgress(30);
   const dataUrl = await fileToDataUrl(file, 420);
-
-  if (isFirebaseConfigured && storage && !isLocalDemoUid(uid)) {
-    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const remoteUrl = await tryFirebaseUploadWithTimeout(
-      `avatars/${uid}/${safeName}`,
-      file,
-      onProgress,
-      1500
-    );
-    if (onProgress) onProgress(100);
-    return remoteUrl || dataUrl;
-  }
-
   if (onProgress) onProgress(100);
   return dataUrl;
 }
 
 /**
- * Uploads a chat attachment (image, document, audio, archive) with instant client optimization.
+ * Converts a chat attachment (image or file) into a Data URL for MongoDB storage.
  */
-export async function uploadChatAttachment({ chatId, senderId, file, onProgress }) {
+export async function uploadChatAttachment({ file, onProgress }) {
   const validation = validateFileUpload(file, 'attachment');
   if (!validation.valid) {
     throw new Error(validation.error);
   }
 
   if (onProgress) onProgress(35);
-
-  const localUrl = file.type.startsWith('image/')
-    ? await fileToDataUrl(file, 960)
-    : URL.createObjectURL(file);
-
-  if (
-    isFirebaseConfigured &&
-    storage &&
-    !isLocalDemoUid(senderId) &&
-    chatId &&
-    !chatId.startsWith('chat_') &&
-    !chatId.startsWith('group_')
-  ) {
-    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const remoteUrl = await tryFirebaseUploadWithTimeout(
-      `chats/${chatId}/${senderId}/${safeName}`,
-      file,
-      onProgress,
-      1500
-    );
-    if (onProgress) onProgress(100);
-    return {
-      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'application/octet-stream',
-      url: remoteUrl || localUrl,
-    };
-  }
-
+  const dataUrl = await fileToDataUrl(file, 960);
   if (onProgress) onProgress(100);
+
   return {
     id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     name: file.name,
     size: file.size,
     type: file.type || 'application/octet-stream',
-    url: localUrl,
+    url: dataUrl,
   };
 }

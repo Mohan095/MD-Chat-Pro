@@ -1,25 +1,17 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import {
-  getFirestore,
-  initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
-} from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-import { getDatabase } from 'firebase/database';
 import { getMessaging, isSupported as isMessagingSupported } from 'firebase/messaging';
 import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 
-// Official md-chat-pro Firebase Configuration
+// Official md-chat-pro-51a44 Firebase Auth & Analytics Configuration
 export const firebaseConfig = {
-  apiKey: 'AIzaSyBK_f7FCzXlwp3ZXtN0-8MgAamsTtYh35Y',
-  authDomain: 'md-chat-pro.firebaseapp.com',
-  projectId: 'md-chat-pro',
-  storageBucket: 'md-chat-pro.firebasestorage.app',
-  messagingSenderId: '173037702593',
-  appId: '1:173037702593:web:374bb5b13b113a63b0f340',
-  measurementId: 'G-JHVZBZ7PHW',
+  apiKey: 'AIzaSyDK4JBj_hpRLJJ81-rzvTNh59Yme_XOjHY',
+  authDomain: 'md-chat-pro-51a44.firebaseapp.com',
+  projectId: 'md-chat-pro-51a44',
+  storageBucket: 'md-chat-pro-51a44.firebasestorage.app',
+  messagingSenderId: '603741080485',
+  appId: '1:603741080485:web:53b6a402be51e78b24764c',
+  measurementId: 'G-B9KM6TWHKF',
 };
 
 export const vapidKey = '';
@@ -30,17 +22,8 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
-let db;
-try {
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    }),
-  });
-} catch {
-  db = getFirestore(app);
-}
-const storage = getStorage(app);
+const db = null;
+const storage = null;
 const rtdb = null;
 let analytics = null;
 
